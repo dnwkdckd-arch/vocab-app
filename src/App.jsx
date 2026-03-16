@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "./supabase";
 
 const WORDS_PER_DAY = 30;
-const STORAGE_KEY = "vocab-memorizer-full-v1";
+const STORAGE_KEY = "vocab-memorizer-local-v2";
+const SESSION_KEY = "vocab-custom-session-v2";
 
 const rainbowColors = [
   "red",
@@ -29,6 +31,15 @@ const createDay = (dayNumber) => ({
 const buildRandomHideMap = (length) =>
   Array.from({ length }, () => (Math.random() > 0.5 ? "word" : "meaning"));
 
+// 보안용은 아니고, 로그인 확인용 간단 해시
+function simpleHash(text) {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 33) ^ text.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 export default function App() {
   const [days, setDays] = useState([createDay(1)]);
   const [currentDay, setCurrentDay] = useState(1);
@@ -40,14 +51,25 @@ export default function App() {
   const [expandedWeeks, setExpandedWeeks] = useState({ 1: true });
 
   const [loaded, setLoaded] = useState(false);
+  const [cloudLoaded, setCloudLoaded] = useState(false);
 
-  const [testMode, setTestMode] = useState("none"); // none | hideMeaning | hideWord | random
+  const [testMode, setTestMode] = useState("none");
   const [showAnswers, setShowAnswers] = useState(false);
-  const [randomHideMap, setRandomHideMap] = useState(buildRandomHideMap(WORDS_PER_DAY));
+  const [randomHideMap, setRandomHideMap] = useState(
+    buildRandomHideMap(WORDS_PER_DAY)
+  );
 
   const [bulkText, setBulkText] = useState("");
   const [installPromptEvent, setInstallPromptEvent] = useState(null);
 
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+
+  const [user, setUser] = useState(null); // { id, username }
+  const [statusMessage, setStatusMessage] = useState("로그인 안 됨");
+
+  // 로컬 상태 불러오기
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -62,18 +84,22 @@ export default function App() {
           setExpandedWeeks(parsed.expandedWeeks || { 1: true });
           setTestMode(parsed.testMode || "none");
           setShowAnswers(parsed.showAnswers || false);
-          setRandomHideMap(parsed.randomHideMap || buildRandomHideMap(WORDS_PER_DAY));
+          setRandomHideMap(
+            parsed.randomHideMap || buildRandomHideMap(WORDS_PER_DAY)
+          );
         }
       }
     } catch (e) {
-      console.error("저장 데이터 불러오기 실패:", e);
+      console.error(e);
     } finally {
       setLoaded(true);
     }
   }, []);
 
+  // 로컬 상태 저장
   useEffect(() => {
     if (!loaded) return;
+
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
@@ -101,6 +127,23 @@ export default function App() {
     loaded,
   ]);
 
+  // 로그인 세션 복구
+  useEffect(() => {
+    try {
+      const savedSession = localStorage.getItem(SESSION_KEY);
+      if (savedSession) {
+        const parsed = JSON.parse(savedSession);
+        if (parsed?.id && parsed?.username) {
+          setUser(parsed);
+          setStatusMessage(`${parsed.username} 로그인됨`);
+        }
+      }
+    } catch (e) {
+      console.error("세션 복구 실패:", e);
+    }
+  }, []);
+
+  // PWA 설치
   useEffect(() => {
     const handler = (e) => {
       e.preventDefault();
@@ -271,9 +314,7 @@ export default function App() {
       const updated = [...words];
 
       lines.forEach((line, i) => {
-        const parts = line.includes("\t")
-          ? line.split("\t")
-          : line.split(/\s*,\s*/);
+        const parts = line.includes("\t") ? line.split("\t") : line.split(/\s*,\s*/);
 
         updated[i] = {
           ...updated[i],
@@ -346,6 +387,241 @@ export default function App() {
     setShowAnswers(false);
     setTestMode("random");
   };
+
+  function speakWord(word) {
+    if (!word || !window.speechSynthesis) return;
+
+    const utterance = new SpeechSynthesisUtterance(word);
+    utterance.lang = "en-US";
+    utterance.rate = 0.9;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  }
+
+  async function handleSignUp() {
+    if (authLoading) return;
+
+    if (!username.trim() || !password.trim()) {
+      setStatusMessage("아이디와 비밀번호를 입력하세요.");
+      alert("아이디와 비밀번호를 입력하세요.");
+      return;
+    }
+
+    setAuthLoading(true);
+    setStatusMessage("회원가입 처리 중...");
+
+    try {
+      const passwordHash = simpleHash(password);
+
+      const { data: existingUser, error: checkError } = await supabase
+        .from("users")
+        .select("id, username")
+        .eq("username", username.trim())
+        .limit(1);
+
+      if (checkError) {
+        console.error(checkError);
+        setStatusMessage("회원가입 확인 중 오류");
+        alert("회원가입 확인 중 오류가 발생했습니다.");
+        return;
+      }
+
+      if (existingUser && existingUser.length > 0) {
+        setStatusMessage("이미 존재하는 아이디");
+        alert("이미 존재하는 아이디입니다.");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("users")
+        .insert({
+          username: username.trim(),
+          password_hash: passwordHash,
+        })
+        .select("id, username");
+
+      if (error) {
+        console.error(error);
+        setStatusMessage("회원가입 실패");
+        alert("회원가입 실패");
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        setStatusMessage("회원가입 결과 없음");
+        alert("회원가입 결과를 확인할 수 없습니다.");
+        return;
+      }
+
+      const sessionUser = {
+        id: data[0].id,
+        username: data[0].username,
+      };
+
+      setUser(sessionUser);
+      localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+      setStatusMessage(`${sessionUser.username} 로그인됨`);
+      alert("회원가입 완료");
+    } catch (e) {
+      console.error(e);
+      setStatusMessage("회원가입 중 예외 발생");
+      alert("회원가입 중 오류가 발생했습니다.");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleSignIn() {
+    if (authLoading) return;
+
+    if (!username.trim() || !password.trim()) {
+      setStatusMessage("아이디와 비밀번호를 입력하세요.");
+      alert("아이디와 비밀번호를 입력하세요.");
+      return;
+    }
+
+    setAuthLoading(true);
+    setStatusMessage("로그인 처리 중...");
+
+    try {
+      const passwordHash = simpleHash(password);
+
+      const { data, error } = await supabase
+        .from("users")
+        .select("id, username, password_hash")
+        .eq("username", username.trim())
+        .limit(1);
+
+      if (error) {
+        console.error(error);
+        setStatusMessage("로그인 실패");
+        alert("로그인 실패");
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        setStatusMessage("존재하지 않는 아이디");
+        alert("존재하지 않는 아이디입니다.");
+        return;
+      }
+
+      const targetUser = data[0];
+
+      if (targetUser.password_hash !== passwordHash) {
+        setStatusMessage("비밀번호 틀림");
+        alert("비밀번호가 틀렸습니다.");
+        return;
+      }
+
+      const sessionUser = {
+        id: targetUser.id,
+        username: targetUser.username,
+      };
+
+      setUser(sessionUser);
+      localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+      setStatusMessage(`${sessionUser.username} 로그인됨`);
+      alert("로그인 성공");
+    } catch (e) {
+      console.error(e);
+      setStatusMessage("로그인 중 예외 발생");
+      alert("로그인 중 오류가 발생했습니다.");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  function handleSignOut() {
+    setUser(null);
+    localStorage.removeItem(SESSION_KEY);
+    setCloudLoaded(false);
+    setStatusMessage("로그인 안 됨");
+    alert("로그아웃됨");
+  }
+
+  async function saveToCloud(state) {
+    if (!user) return;
+
+    const { error } = await supabase.from("vocab_state").upsert({
+      user_id: user.id,
+      data: state,
+    });
+
+    if (error) {
+      console.error("클라우드 저장 실패:", error);
+    }
+  }
+
+  async function loadFromCloud() {
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from("vocab_state")
+      .select("data")
+      .eq("user_id", user.id)
+      .limit(1);
+
+    if (error) {
+      console.error("클라우드 불러오기 실패:", error);
+      setCloudLoaded(true);
+      return;
+    }
+
+    if (data && data.length > 0 && data[0].data) {
+      const saved = data[0].data;
+
+      if (saved.days) setDays(saved.days);
+      if (saved.currentDay) setCurrentDay(saved.currentDay);
+      if (typeof saved.reviewMode === "boolean") setReviewMode(saved.reviewMode);
+      if (saved.reviewTarget) setReviewTarget(saved.reviewTarget);
+      if (saved.expandedMonths) setExpandedMonths(saved.expandedMonths);
+      if (saved.expandedWeeks) setExpandedWeeks(saved.expandedWeeks);
+      if (saved.testMode) setTestMode(saved.testMode);
+      if (typeof saved.showAnswers === "boolean") setShowAnswers(saved.showAnswers);
+      if (saved.randomHideMap) setRandomHideMap(saved.randomHideMap);
+    }
+
+    setCloudLoaded(true);
+  }
+
+  useEffect(() => {
+    if (user) {
+      setCloudLoaded(false);
+      loadFromCloud();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !cloudLoaded) return;
+
+    const state = {
+      days,
+      currentDay,
+      reviewMode,
+      reviewTarget,
+      expandedMonths,
+      expandedWeeks,
+      testMode,
+      showAnswers,
+      randomHideMap,
+    };
+
+    saveToCloud(state);
+  }, [
+    user,
+    cloudLoaded,
+    days,
+    currentDay,
+    reviewMode,
+    reviewTarget,
+    expandedMonths,
+    expandedWeeks,
+    testMode,
+    showAnswers,
+    randomHideMap,
+  ]);
+
+  const displayUsername = user?.username || "";
 
   return (
     <div style={pageStyle}>
@@ -494,6 +770,64 @@ export default function App() {
         </aside>
 
         <main style={mainStyle}>
+          <div
+            style={{
+              marginBottom: "12px",
+              color: user ? "green" : "#666",
+              fontWeight: "bold",
+            }}
+          >
+            {statusMessage}
+          </div>
+
+          <div style={{ marginBottom: "16px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            {user ? (
+              <>
+                <div
+                  style={{
+                    padding: "10px 12px",
+                    border: "1px solid #ccc",
+                    borderRadius: "8px",
+                    background: "white",
+                    color: "black",
+                  }}
+                >
+                  로그인: {displayUsername}
+                </div>
+
+                <button onClick={handleSignOut} style={toolbarButtonStyle}>
+                  로그아웃
+                </button>
+              </>
+            ) : (
+              <>
+                <input
+                  type="text"
+                  placeholder="아이디"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  style={authInputStyle}
+                />
+
+                <input
+                  type="password"
+                  placeholder="비밀번호"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  style={authInputStyle}
+                />
+
+                <button onClick={handleSignUp} style={toolbarButtonStyle} disabled={authLoading}>
+                  {authLoading ? "처리 중..." : "회원가입"}
+                </button>
+
+                <button onClick={handleSignIn} style={toolbarButtonStyle} disabled={authLoading}>
+                  {authLoading ? "처리 중..." : "로그인"}
+                </button>
+              </>
+            )}
+          </div>
+
           <h1 style={{ color: "black", marginTop: 0 }}>
             {reviewMode ? reviewLabel : `단어 암기 프로그램 (${currentDay}일차)`}
           </h1>
@@ -584,14 +918,14 @@ already\t이미`}
                 </th>
                 <th style={thStyle}>단어</th>
                 <th style={thStyle}>뜻</th>
+                <th style={{ ...thStyle, width: "80px" }}>발음</th>
                 {!reviewMode && <th style={{ ...thStyle, width: "90px" }}>정답</th>}
               </tr>
             </thead>
 
             <tbody>
               {displayRows.map((item, index) => {
-                const color =
-                  item.colorIndex === -1 ? "black" : rainbowColors[item.colorIndex];
+                const color = item.colorIndex === -1 ? "black" : rainbowColors[item.colorIndex];
 
                 const hiddenType = getHiddenType(index);
                 const hideWord = testMode !== "none" && hiddenType === "word" && !showAnswers;
@@ -614,11 +948,7 @@ already\t이미`}
 
                     <td style={{ ...tdStyle, color, fontWeight: "bold" }}>
                       {reviewMode ? (
-                        hideWord ? (
-                          <span style={hiddenTextStyle}>????</span>
-                        ) : (
-                          item.word || "-"
-                        )
+                        hideWord ? <span style={hiddenTextStyle}>????</span> : item.word || "-"
                       ) : hideWord ? (
                         <span style={hiddenTextStyle}>????</span>
                       ) : (
@@ -646,6 +976,12 @@ already\t이미`}
                           style={{ ...inputStyle, color }}
                         />
                       )}
+                    </td>
+
+                    <td style={tdStyle}>
+                      <button onClick={() => speakWord(item.word)} style={smallButtonStyle}>
+                        🔊
+                      </button>
                     </td>
 
                     {!reviewMode && (
@@ -885,4 +1221,11 @@ const smallButtonStyle = {
 const hiddenTextStyle = {
   letterSpacing: "2px",
   color: "#999",
+};
+
+const authInputStyle = {
+  padding: "10px",
+  border: "1px solid #ccc",
+  borderRadius: "8px",
+  minWidth: "220px",
 };
