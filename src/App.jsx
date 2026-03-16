@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
 
 const WORDS_PER_DAY = 30;
-const STORAGE_KEY = "vocab-memorizer-local-v2";
-const SESSION_KEY = "vocab-custom-session-v2";
+const STORAGE_KEY = "vocab-memorizer-local-v4";
+const SESSION_KEY = "vocab-custom-session-v4";
 
 const rainbowColors = [
   "red",
@@ -31,7 +31,6 @@ const createDay = (dayNumber) => ({
 const buildRandomHideMap = (length) =>
   Array.from({ length }, () => (Math.random() > 0.5 ? "word" : "meaning"));
 
-// 보안용은 아니고, 로그인 확인용 간단 해시
 function simpleHash(text) {
   let hash = 5381;
   for (let i = 0; i < text.length; i++) {
@@ -66,10 +65,10 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
-  const [user, setUser] = useState(null); // { id, username }
+  const [user, setUser] = useState(null);
   const [statusMessage, setStatusMessage] = useState("로그인 안 됨");
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  // 로컬 상태 불러오기
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -96,7 +95,6 @@ export default function App() {
     }
   }, []);
 
-  // 로컬 상태 저장
   useEffect(() => {
     if (!loaded) return;
 
@@ -127,7 +125,6 @@ export default function App() {
     loaded,
   ]);
 
-  // 로그인 세션 복구
   useEffect(() => {
     try {
       const savedSession = localStorage.getItem(SESSION_KEY);
@@ -143,7 +140,6 @@ export default function App() {
     }
   }, []);
 
-  // PWA 설치
   useEffect(() => {
     const handler = (e) => {
       e.preventDefault();
@@ -390,7 +386,6 @@ export default function App() {
 
   function speakWord(word) {
     if (!word || !window.speechSynthesis) return;
-
     const utterance = new SpeechSynthesisUtterance(word);
     utterance.lang = "en-US";
     utterance.rate = 0.9;
@@ -625,10 +620,40 @@ export default function App() {
 
   return (
     <div style={pageStyle}>
-      <div style={layoutStyle}>
-        <aside style={sidebarStyle}>
-          <h2 style={titleStyle}>학습 구간</h2>
+      {menuOpen && <div style={overlayStyle} onClick={() => setMenuOpen(false)} />}
 
+      <button style={menuButtonStyle} onClick={() => setMenuOpen((prev) => !prev)}>
+        ☰
+      </button>
+
+      <aside
+        style={{
+          ...drawerStyle,
+          transform: menuOpen ? "translateX(0)" : "translateX(110%)",
+        }}
+      >
+        <div style={drawerHeaderStyle}>
+          <div style={{ fontWeight: "bold", fontSize: "18px" }}>메뉴</div>
+          <button style={drawerCloseStyle} onClick={() => setMenuOpen(false)}>
+            ✕
+          </button>
+        </div>
+
+        <button
+          style={drawerMainButtonStyle}
+          onClick={() => {
+            setReviewMode(false);
+            setMenuOpen(false);
+          }}
+        >
+          단어 암기 프로그램으로 돌아가기
+        </button>
+
+        <div style={{ marginTop: "16px", fontWeight: "bold", marginBottom: "10px" }}>
+          학습 구간
+        </div>
+
+        <div style={{ overflowY: "auto", flex: 1 }}>
           {monthTree.map((month) => (
             <div key={`month-${month.month}`} style={{ marginBottom: "10px" }}>
               <div style={monthRowStyle}>
@@ -639,6 +664,7 @@ export default function App() {
                   onClick={() => {
                     setReviewTarget({ type: "month", value: month.month });
                     setReviewMode(true);
+                    setMenuOpen(false);
                   }}
                   style={{
                     ...reviewPickButtonStyle,
@@ -673,6 +699,7 @@ export default function App() {
                           onClick={() => {
                             setReviewTarget({ type: "week", value: week.week });
                             setReviewMode(true);
+                            setMenuOpen(false);
                           }}
                           style={{
                             ...reviewPickButtonStyle,
@@ -702,6 +729,7 @@ export default function App() {
                                     setCurrentDay(dayData.day);
                                     setReviewMode(false);
                                     setBulkText("");
+                                    setMenuOpen(false);
                                   }}
                                   style={{
                                     ...dayButtonStyle,
@@ -720,6 +748,7 @@ export default function App() {
                                   onClick={() => {
                                     setReviewTarget({ type: "day", value: dayData.day });
                                     setReviewMode(true);
+                                    setMenuOpen(false);
                                   }}
                                   style={{
                                     ...reviewPickButtonStyle,
@@ -740,186 +769,150 @@ export default function App() {
               )}
             </div>
           ))}
+        </div>
+      </aside>
 
-          <button onClick={addNextDay} style={{ ...actionButtonStyle, marginTop: "12px" }}>
-            다음 일차 추가
+      <main style={mainStyleFull}>
+        <div
+          style={{
+            marginBottom: "12px",
+            color: user ? "green" : "#666",
+            fontWeight: "bold",
+            paddingRight: "48px",
+          }}
+        >
+          {statusMessage}
+        </div>
+
+        <div style={topAuthWrapStyle}>
+          {user ? (
+            <>
+              <div style={loggedBoxStyle}>로그인: {displayUsername}</div>
+              <button onClick={handleSignOut} style={toolbarButtonStyle}>
+                로그아웃
+              </button>
+            </>
+          ) : (
+            <>
+              <input
+                type="text"
+                placeholder="아이디"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                style={authInputStyle}
+              />
+
+              <input
+                type="password"
+                placeholder="비밀번호"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={authInputStyle}
+              />
+
+              <button onClick={handleSignUp} style={toolbarButtonStyle} disabled={authLoading}>
+                {authLoading ? "처리 중..." : "회원가입"}
+              </button>
+
+              <button onClick={handleSignIn} style={toolbarButtonStyle} disabled={authLoading}>
+                {authLoading ? "처리 중..." : "로그인"}
+              </button>
+            </>
+          )}
+        </div>
+
+        <h1 style={{ color: "black", marginTop: 0 }}>
+          {reviewMode ? reviewLabel : `단어 암기 프로그램 (${currentDay}일차)`}
+        </h1>
+
+        <div style={testToolbarStyle}>
+          <button
+            onClick={() => {
+              setTestMode("none");
+              setShowAnswers(false);
+            }}
+            style={{
+              ...toolbarButtonStyle,
+              backgroundColor: testMode === "none" ? "#111" : "white",
+              color: testMode === "none" ? "white" : "black",
+            }}
+          >
+            일반 모드
           </button>
 
           <button
-            onClick={() => setReviewMode((prev) => !prev)}
-            style={{ ...actionButtonStyle, marginTop: "10px" }}
-          >
-            {reviewMode ? "일반 보기로 돌아가기" : reviewLabel}
-          </button>
-
-          <button onClick={resetCurrentDay} style={{ ...actionButtonStyle, marginTop: "10px" }}>
-            현재 일차 초기화
-          </button>
-
-          <button onClick={installAsApp} style={{ ...actionButtonStyle, marginTop: "10px" }}>
-            홈 화면에 추가
-          </button>
-
-          <div style={infoTextStyle}>
-            새로고침해도 자동 저장됩니다.
-            <br />
-            달차 → 주차 → 일차 순서로 펼쳐서 선택할 수 있습니다.
-            <br />
-            각 달차/주차/일차 옆의 복습 버튼으로 틀린 단어만 볼 수 있습니다.
-          </div>
-        </aside>
-
-        <main style={mainStyle}>
-          <div
+            onClick={() => {
+              setTestMode("hideMeaning");
+              setShowAnswers(false);
+            }}
             style={{
-              marginBottom: "12px",
-              color: user ? "green" : "#666",
-              fontWeight: "bold",
+              ...toolbarButtonStyle,
+              backgroundColor: testMode === "hideMeaning" ? "#111" : "white",
+              color: testMode === "hideMeaning" ? "white" : "black",
             }}
           >
-            {statusMessage}
-          </div>
+            뜻 숨기기
+          </button>
 
-          <div style={{ marginBottom: "16px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {user ? (
-              <>
-                <div
-                  style={{
-                    padding: "10px 12px",
-                    border: "1px solid #ccc",
-                    borderRadius: "8px",
-                    background: "white",
-                    color: "black",
-                  }}
-                >
-                  로그인: {displayUsername}
-                </div>
+          <button
+            onClick={() => {
+              setTestMode("hideWord");
+              setShowAnswers(false);
+            }}
+            style={{
+              ...toolbarButtonStyle,
+              backgroundColor: testMode === "hideWord" ? "#111" : "white",
+              color: testMode === "hideWord" ? "white" : "black",
+            }}
+          >
+            단어 숨기기
+          </button>
 
-                <button onClick={handleSignOut} style={toolbarButtonStyle}>
-                  로그아웃
-                </button>
-              </>
-            ) : (
-              <>
-                <input
-                  type="text"
-                  placeholder="아이디"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  style={authInputStyle}
-                />
+          <button
+            onClick={shuffleRandomMode}
+            style={{
+              ...toolbarButtonStyle,
+              backgroundColor: testMode === "random" ? "#111" : "white",
+              color: testMode === "random" ? "white" : "black",
+            }}
+          >
+            랜덤 숨기기
+          </button>
 
-                <input
-                  type="password"
-                  placeholder="비밀번호"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  style={authInputStyle}
-                />
+          <button onClick={() => setShowAnswers((prev) => !prev)} style={toolbarButtonStyle}>
+            {showAnswers ? "정답 가리기" : "정답 보기"}
+          </button>
+        </div>
 
-                <button onClick={handleSignUp} style={toolbarButtonStyle} disabled={authLoading}>
-                  {authLoading ? "처리 중..." : "회원가입"}
-                </button>
-
-                <button onClick={handleSignIn} style={toolbarButtonStyle} disabled={authLoading}>
-                  {authLoading ? "처리 중..." : "로그인"}
-                </button>
-              </>
-            )}
-          </div>
-
-          <h1 style={{ color: "black", marginTop: 0 }}>
-            {reviewMode ? reviewLabel : `단어 암기 프로그램 (${currentDay}일차)`}
-          </h1>
-
-          <div style={testToolbarStyle}>
-            <button
-              onClick={() => {
-                setTestMode("none");
-                setShowAnswers(false);
-              }}
-              style={{
-                ...toolbarButtonStyle,
-                backgroundColor: testMode === "none" ? "#111" : "white",
-                color: testMode === "none" ? "white" : "black",
-              }}
-            >
-              일반 모드
-            </button>
-
-            <button
-              onClick={() => {
-                setTestMode("hideMeaning");
-                setShowAnswers(false);
-              }}
-              style={{
-                ...toolbarButtonStyle,
-                backgroundColor: testMode === "hideMeaning" ? "#111" : "white",
-                color: testMode === "hideMeaning" ? "white" : "black",
-              }}
-            >
-              뜻 숨기기
-            </button>
-
-            <button
-              onClick={() => {
-                setTestMode("hideWord");
-                setShowAnswers(false);
-              }}
-              style={{
-                ...toolbarButtonStyle,
-                backgroundColor: testMode === "hideWord" ? "#111" : "white",
-                color: testMode === "hideWord" ? "white" : "black",
-              }}
-            >
-              단어 숨기기
-            </button>
-
-            <button
-              onClick={shuffleRandomMode}
-              style={{
-                ...toolbarButtonStyle,
-                backgroundColor: testMode === "random" ? "#111" : "white",
-                color: testMode === "random" ? "white" : "black",
-              }}
-            >
-              랜덤 숨기기
-            </button>
-
-            <button onClick={() => setShowAnswers((prev) => !prev)} style={toolbarButtonStyle}>
-              {showAnswers ? "정답 가리기" : "정답 보기"}
-            </button>
-          </div>
-
-          {!reviewMode && (
-            <div style={pasteBlockStyle}>
-              <textarea
-                value={bulkText}
-                onChange={(e) => setBulkText(e.target.value)}
-                placeholder={`전체 복붙용 입력창
+        {!reviewMode && (
+          <div style={pasteBlockStyle}>
+            <textarea
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+              placeholder={`전체 복붙용 입력창
 형식 예시:
-actually\t사실은
-almost\t거의
-already\t이미`}
-                style={textareaStyle}
-              />
+a piece of cake\t아주 쉬운 일
+break the ice\t어색한 분위기를 깨다`}
+              style={textareaStyle}
+            />
 
-              <button onClick={applyBulkPaste} style={{ ...actionButtonStyle, marginTop: "8px" }}>
-                전체 적용
-              </button>
-            </div>
-          )}
+            <button onClick={applyBulkPaste} style={{ ...actionButtonStyle, marginTop: "8px", maxWidth: "220px" }}>
+              전체 적용
+            </button>
+          </div>
+        )}
 
+        <div style={tableWrapStyle}>
           <table style={tableStyle}>
             <thead>
               <tr>
-                <th style={{ ...thStyle, width: reviewMode ? "90px" : "70px" }}>
-                  {reviewMode ? "일차" : "번호"}
+                <th style={{ ...thStyle, width: "42px" }}>
+                  {reviewMode ? "일" : "번호"}
                 </th>
-                <th style={thStyle}>단어</th>
-                <th style={thStyle}>뜻</th>
-                <th style={{ ...thStyle, width: "80px" }}>발음</th>
-                {!reviewMode && <th style={{ ...thStyle, width: "90px" }}>정답</th>}
+                <th style={wordThStyle}>단어</th>
+                <th style={meaningThStyle}>뜻</th>
+                <th style={{ ...thStyle, width: "54px" }}>발음</th>
+                {!reviewMode && <th style={{ ...thStyle, width: "58px" }}>정답</th>}
               </tr>
             </thead>
 
@@ -936,17 +929,17 @@ already\t이미`}
                   <tr key={reviewMode ? `${item.day}-${item.id}-${index}` : item.id}>
                     <td
                       style={{
-                        ...tdStyle,
+                        ...smallTdStyle,
                         color,
                         fontWeight: "bold",
                         cursor: reviewMode ? "default" : "pointer",
                       }}
                       onClick={() => handleNumberClick(index)}
                     >
-                      {reviewMode ? `${item.day}일차` : item.id}
+                      {reviewMode ? item.day : item.id}
                     </td>
 
-                    <td style={{ ...tdStyle, color, fontWeight: "bold" }}>
+                    <td style={{ ...wordTdStyle, color, fontWeight: "bold" }}>
                       {reviewMode ? (
                         hideWord ? <span style={hiddenTextStyle}>????</span> : item.word || "-"
                       ) : hideWord ? (
@@ -955,12 +948,12 @@ already\t이미`}
                         <input
                           value={item.word}
                           onChange={(e) => handleChange(index, "word", e.target.value)}
-                          style={{ ...inputStyle, color }}
+                          style={{ ...compactInputStyle, color }}
                         />
                       )}
                     </td>
 
-                    <td style={{ ...tdStyle, color, fontWeight: "bold" }}>
+                    <td style={{ ...meaningTdStyle, color, fontWeight: "bold" }}>
                       {reviewMode ? (
                         hideMeaning ? (
                           <span style={hiddenTextStyle}>????</span>
@@ -973,20 +966,20 @@ already\t이미`}
                         <input
                           value={item.meaning}
                           onChange={(e) => handleChange(index, "meaning", e.target.value)}
-                          style={{ ...inputStyle, color }}
+                          style={{ ...compactInputStyle, color }}
                         />
                       )}
                     </td>
 
-                    <td style={tdStyle}>
-                      <button onClick={() => speakWord(item.word)} style={smallButtonStyle}>
+                    <td style={smallTdStyle}>
+                      <button onClick={() => speakWord(item.word)} style={tinyButtonStyle}>
                         🔊
                       </button>
                     </td>
 
                     {!reviewMode && (
-                      <td style={tdStyle}>
-                        <button onClick={() => markAsCorrect(index)} style={smallButtonStyle}>
+                      <td style={smallTdStyle}>
+                        <button onClick={() => markAsCorrect(index)} style={tinyButtonStyle}>
                           정답
                         </button>
                       </td>
@@ -996,82 +989,134 @@ already\t이미`}
               })}
             </tbody>
           </table>
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
   );
 }
 
 const pageStyle = {
-  padding: "10px",
-  fontFamily: "sans-serif",
+  minHeight: "100vh",
   background: "#f7f7f7",
-  height: "100vh",
-  overflow: "hidden",
-  boxSizing: "border-box",
+  fontFamily: "sans-serif",
+  position: "relative",
 };
 
-const layoutStyle = {
-  display: "grid",
-  gridTemplateColumns: "320px 1fr",
-  gap: "10px",
-  height: "100%",
-};
-
-const sidebarStyle = {
-  background: "white",
-  border: "1px solid #ddd",
-  borderRadius: "14px",
+const mainStyleFull = {
   padding: "12px",
-  overflowY: "auto",
+  maxWidth: "100%",
   boxSizing: "border-box",
 };
 
-const mainStyle = {
+const overlayStyle = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.25)",
+  zIndex: 20,
+};
+
+const menuButtonStyle = {
+  position: "fixed",
+  top: "10px",
+  right: "10px",
+  zIndex: 30,
+  width: "40px",
+  height: "40px",
+  borderRadius: "10px",
+  border: "1px solid #ccc",
   background: "white",
-  border: "1px solid #ddd",
-  borderRadius: "14px",
-  padding: "20px",
-  overflowY: "auto",
-  overflowX: "hidden",
-  boxSizing: "border-box",
+  color: "black",
+  cursor: "pointer",
+  fontSize: "20px",
 };
 
-const titleStyle = {
-  marginTop: 0,
+const drawerStyle = {
+  position: "fixed",
+  top: 0,
+  right: 0,
+  width: "min(88vw, 360px)",
+  height: "100vh",
+  background: "white",
+  borderLeft: "1px solid #ddd",
+  zIndex: 40,
+  transition: "transform 0.25s ease",
+  padding: "14px",
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+};
+
+const drawerHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  marginBottom: "12px",
+};
+
+const drawerCloseStyle = {
+  width: "34px",
+  height: "34px",
+  borderRadius: "8px",
+  border: "1px solid #ccc",
+  background: "white",
+  cursor: "pointer",
+};
+
+const drawerMainButtonStyle = {
+  width: "100%",
+  padding: "12px",
+  border: "1px solid #ccc",
+  borderRadius: "10px",
+  background: "#111",
+  color: "white",
+  cursor: "pointer",
+};
+
+const topAuthWrapStyle = {
   marginBottom: "16px",
+  display: "flex",
+  gap: "8px",
+  flexWrap: "wrap",
+  alignItems: "center",
+};
+
+const loggedBoxStyle = {
+  padding: "10px 12px",
+  border: "1px solid #ccc",
+  borderRadius: "8px",
+  background: "white",
   color: "black",
 };
 
 const metaTextStyle = {
-  fontSize: "13px",
+  fontSize: "12px",
   opacity: 0.8,
 };
 
 const monthRowStyle = {
   display: "grid",
-  gridTemplateColumns: "1fr 64px",
-  gap: "8px",
+  gridTemplateColumns: "1fr 58px",
+  gap: "6px",
   marginBottom: "4px",
 };
 
 const weekRowStyle = {
   display: "grid",
-  gridTemplateColumns: "1fr 64px",
-  gap: "8px",
+  gridTemplateColumns: "1fr 58px",
+  gap: "6px",
   marginBottom: "4px",
 };
 
 const dayRowStyle = {
   display: "grid",
-  gridTemplateColumns: "1fr 64px",
-  gap: "8px",
+  gridTemplateColumns: "1fr 58px",
+  gap: "6px",
   marginBottom: "6px",
 };
 
 const toggleButtonStyle = {
   width: "100%",
-  padding: "12px",
+  padding: "10px",
   border: "1px solid #ccc",
   borderRadius: "10px",
   textAlign: "left",
@@ -1079,28 +1124,29 @@ const toggleButtonStyle = {
   boxSizing: "border-box",
   background: "white",
   color: "black",
+  fontSize: "13px",
 };
 
 const reviewPickButtonStyle = {
   width: "100%",
-  padding: "10px 6px",
+  padding: "8px 4px",
   border: "1px solid #ccc",
   borderRadius: "8px",
   background: "white",
   color: "black",
   cursor: "pointer",
   boxSizing: "border-box",
-  fontSize: "12px",
+  fontSize: "11px",
 };
 
 const weekListStyle = {
-  marginLeft: "12px",
+  marginLeft: "10px",
   marginTop: "8px",
 };
 
 const weekToggleStyle = {
   width: "100%",
-  padding: "10px",
+  padding: "8px",
   border: "1px solid #ccc",
   borderRadius: "10px",
   textAlign: "left",
@@ -1108,21 +1154,23 @@ const weekToggleStyle = {
   boxSizing: "border-box",
   background: "white",
   color: "black",
+  fontSize: "13px",
 };
 
 const dayListStyle = {
-  marginLeft: "12px",
+  marginLeft: "10px",
   marginTop: "8px",
 };
 
 const dayButtonStyle = {
   width: "100%",
-  padding: "10px",
+  padding: "8px",
   border: "1px solid #ccc",
   borderRadius: "8px",
   textAlign: "left",
   cursor: "pointer",
   boxSizing: "border-box",
+  background: "white",
 };
 
 const actionButtonStyle = {
@@ -1138,7 +1186,7 @@ const actionButtonStyle = {
 
 const infoTextStyle = {
   marginTop: "16px",
-  fontSize: "13px",
+  fontSize: "12px",
   color: "#555",
   lineHeight: 1.6,
 };
@@ -1146,26 +1194,27 @@ const infoTextStyle = {
 const testToolbarStyle = {
   display: "flex",
   flexWrap: "wrap",
-  gap: "8px",
-  marginBottom: "16px",
+  gap: "6px",
+  marginBottom: "14px",
 };
 
 const toolbarButtonStyle = {
-  padding: "10px 12px",
+  padding: "9px 10px",
   border: "1px solid #ccc",
   borderRadius: "8px",
   background: "white",
   color: "black",
   cursor: "pointer",
+  fontSize: "13px",
 };
 
 const pasteBlockStyle = {
-  marginBottom: "18px",
+  marginBottom: "16px",
 };
 
 const textareaStyle = {
   width: "100%",
-  minHeight: "140px",
+  minHeight: "120px",
   border: "1px solid #ccc",
   borderRadius: "8px",
   padding: "10px",
@@ -1176,50 +1225,95 @@ const textareaStyle = {
   boxSizing: "border-box",
 };
 
+const tableWrapStyle = {
+  width: "100%",
+  overflowX: "auto",
+  WebkitOverflowScrolling: "touch",
+};
+
 const tableStyle = {
   borderCollapse: "collapse",
   width: "100%",
+  minWidth: "620px",
   tableLayout: "fixed",
   background: "white",
 };
 
 const thStyle = {
   border: "1px solid #ccc",
-  padding: "10px",
+  padding: "8px 6px",
   background: "#f5f5f5",
   color: "black",
-  textAlign: "left",
+  textAlign: "center",
+  fontSize: "12px",
+  lineHeight: 1.2,
+  whiteSpace: "nowrap",
 };
 
-const tdStyle = {
+const wordThStyle = {
+  ...thStyle,
+  width: "35%",
+};
+
+const meaningThStyle = {
+  ...thStyle,
+  width: "43%",
+};
+
+const smallTdStyle = {
   border: "1px solid #ccc",
-  padding: "10px",
+  padding: "6px 4px",
   background: "white",
-  wordBreak: "break-word",
+  textAlign: "center",
+  fontSize: "12px",
+  verticalAlign: "middle",
 };
 
-const inputStyle = {
+const wordTdStyle = {
+  border: "1px solid #ccc",
+  padding: "6px 6px",
+  background: "white",
+  fontSize: "12px",
+  verticalAlign: "middle",
+  wordBreak: "break-word",
+  lineHeight: 1.35,
+};
+
+const meaningTdStyle = {
+  border: "1px solid #ccc",
+  padding: "6px 6px",
+  background: "white",
+  fontSize: "12px",
+  verticalAlign: "middle",
+  wordBreak: "break-word",
+  lineHeight: 1.35,
+};
+
+const compactInputStyle = {
   width: "100%",
   border: "none",
   outline: "none",
-  fontSize: "16px",
+  fontSize: "12px",
   background: "transparent",
   boxSizing: "border-box",
+  lineHeight: 1.35,
+  padding: 0,
 };
 
-const smallButtonStyle = {
+const tinyButtonStyle = {
   width: "100%",
-  padding: "8px 10px",
+  padding: "6px 4px",
   border: "1px solid #ccc",
-  borderRadius: "8px",
+  borderRadius: "6px",
   background: "white",
   color: "black",
   cursor: "pointer",
   boxSizing: "border-box",
+  fontSize: "11px",
 };
 
 const hiddenTextStyle = {
-  letterSpacing: "2px",
+  letterSpacing: "1px",
   color: "#999",
 };
 
@@ -1227,5 +1321,6 @@ const authInputStyle = {
   padding: "10px",
   border: "1px solid #ccc",
   borderRadius: "8px",
-  minWidth: "220px",
+  minWidth: "120px",
+  flex: "1 1 140px",
 };
