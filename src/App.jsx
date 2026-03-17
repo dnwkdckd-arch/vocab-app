@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
+import { generateDayWords } from "./vocabBank";
 
 const WORDS_PER_DAY = 30;
-const STORAGE_KEY = "vocab-memorizer-local-v4";
-const SESSION_KEY = "vocab-custom-session-v4";
+const TOTAL_DAYS = 365;
+const STORAGE_KEY = "vocab-memorizer-local-v7";
+const SESSION_KEY = "vocab-custom-session-v7";
 
 const rainbowColors = [
   "red",
@@ -15,7 +17,7 @@ const rainbowColors = [
   "violet",
 ];
 
-const createDayWords = () =>
+const createEmptyDayWords = () =>
   Array.from({ length: WORDS_PER_DAY }, (_, i) => ({
     id: i + 1,
     word: "",
@@ -23,10 +25,15 @@ const createDayWords = () =>
     colorIndex: -1,
   }));
 
-const createDay = (dayNumber) => ({
+const createDay = (dayNumber, usePreset = true) => ({
   day: dayNumber,
-  words: createDayWords(),
+  words: usePreset
+    ? generateDayWords(dayNumber, WORDS_PER_DAY)
+    : createEmptyDayWords(),
 });
+
+const createInitialDays = () =>
+  Array.from({ length: TOTAL_DAYS }, (_, i) => createDay(i + 1, true));
 
 const buildRandomHideMap = (length) =>
   Array.from({ length }, () => (Math.random() > 0.5 ? "word" : "meaning"));
@@ -39,8 +46,87 @@ function simpleHash(text) {
   return (hash >>> 0).toString(16);
 }
 
+function shuffleArray(array) {
+  const copied = [...array];
+  for (let i = copied.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copied[i], copied[j]] = [copied[j], copied[i]];
+  }
+  return copied;
+}
+
+function getWeekFromDay(day) {
+  return Math.floor((day - 1) / 7) + 1;
+}
+
+function getMonthFromDay(day) {
+  return Math.floor((day - 1) / 30) + 1;
+}
+
+function normalizeText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[.,!?]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function meaningTokens(text) {
+  return String(text || "")
+    .split(/[;/]/)
+    .map((v) => normalizeText(v))
+    .filter(Boolean);
+}
+
+function wordKey(item) {
+  return `${item.originDay || item.day || 0}__${normalizeText(item.word)}__${normalizeText(
+    item.meaning
+  )}`;
+}
+
+function enrichWord(item, fallbackDay) {
+  return {
+    ...item,
+    originDay: item.originDay || item.day || fallbackDay,
+  };
+}
+
+function mergeUniqueWords(base = [], incoming = []) {
+  const map = new Map();
+
+  [...base, ...incoming].forEach((item) => {
+    const normalized = enrichWord(item, item.originDay || item.day || 0);
+    map.set(wordKey(normalized), normalized);
+  });
+
+  return Array.from(map.values());
+}
+
+function removeWordsByKeys(base = [], keysToRemove = []) {
+  const keySet = new Set(keysToRemove);
+  return base.filter((item) => !keySet.has(wordKey(item)));
+}
+
+function isAnswerCorrect(userAnswer, item, direction) {
+  const input = normalizeText(userAnswer);
+
+  if (!input) return false;
+
+  if (direction === "meaningToWord") {
+    return input === normalizeText(item.word);
+  }
+
+  const correctMeaning = normalizeText(item.meaning);
+  const tokens = meaningTokens(item.meaning);
+
+  if (input === correctMeaning) return true;
+  if (tokens.includes(input)) return true;
+
+  return tokens.some((token) => token.includes(input) || input.includes(token));
+}
+
 export default function App() {
-  const [days, setDays] = useState([createDay(1)]);
+  const [days, setDays] = useState(createInitialDays());
   const [currentDay, setCurrentDay] = useState(1);
 
   const [reviewMode, setReviewMode] = useState(false);
@@ -69,6 +155,16 @@ export default function App() {
   const [statusMessage, setStatusMessage] = useState("로그인 안 됨");
   const [menuOpen, setMenuOpen] = useState(false);
 
+  const [todayWrongWords, setTodayWrongWords] = useState([]);
+  const [weeklyWrongMap, setWeeklyWrongMap] = useState({});
+  const [monthlyWrongMap, setMonthlyWrongMap] = useState({});
+
+  const [testDirection, setTestDirection] = useState("meaningToWord");
+  const [testSession, setTestSession] = useState(null);
+  const [testInput, setTestInput] = useState("");
+  const [testChecked, setTestChecked] = useState(false);
+  const [testFeedback, setTestFeedback] = useState(null);
+
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -86,44 +182,18 @@ export default function App() {
           setRandomHideMap(
             parsed.randomHideMap || buildRandomHideMap(WORDS_PER_DAY)
           );
+          setTodayWrongWords(parsed.todayWrongWords || []);
+          setWeeklyWrongMap(parsed.weeklyWrongMap || {});
+          setMonthlyWrongMap(parsed.monthlyWrongMap || {});
+          setTestDirection(parsed.testDirection || "meaningToWord");
         }
       }
     } catch (e) {
-      console.error(e);
+      console.error("로컬 데이터 불러오기 실패:", e);
     } finally {
       setLoaded(true);
     }
   }, []);
-
-  useEffect(() => {
-    if (!loaded) return;
-
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        days,
-        currentDay,
-        reviewMode,
-        reviewTarget,
-        expandedMonths,
-        expandedWeeks,
-        testMode,
-        showAnswers,
-        randomHideMap,
-      })
-    );
-  }, [
-    days,
-    currentDay,
-    reviewMode,
-    reviewTarget,
-    expandedMonths,
-    expandedWeeks,
-    testMode,
-    showAnswers,
-    randomHideMap,
-    loaded,
-  ]);
 
   useEffect(() => {
     try {
@@ -233,11 +303,9 @@ export default function App() {
       if (reviewTarget.type === "day") {
         include = dayData.day === reviewTarget.value;
       } else if (reviewTarget.type === "week") {
-        const week = Math.floor((dayData.day - 1) / 7) + 1;
-        include = week === reviewTarget.value;
+        include = getWeekFromDay(dayData.day) === reviewTarget.value;
       } else if (reviewTarget.type === "month") {
-        const month = Math.floor((dayData.day - 1) / 30) + 1;
-        include = month === reviewTarget.value;
+        include = getMonthFromDay(dayData.day) === reviewTarget.value;
       }
 
       if (!include) return;
@@ -254,51 +322,238 @@ export default function App() {
 
   const displayRows = reviewMode ? wrongWords : currentDayData.words;
 
-  const updateCurrentDayWords = (updater) => {
-    setDays((prev) =>
-      prev.map((dayData) => {
-        if (dayData.day !== currentDay) return dayData;
-        return { ...dayData, words: updater(dayData.words) };
-      })
+  const currentWeek = getWeekFromDay(currentDay);
+  const currentMonth = getMonthFromDay(currentDay);
+
+  const currentWeeklyWrongCount = (weeklyWrongMap[currentWeek] || []).length;
+  const currentMonthlyWrongCount = (monthlyWrongMap[currentMonth] || []).length;
+
+  const currentTestItem = testSession?.items?.[testSession.currentIndex] || null;
+
+  function buildState(
+    nextDays = days,
+    nextCurrentDay = currentDay,
+    nextReviewMode = reviewMode,
+    nextReviewTarget = reviewTarget,
+    nextExpandedMonths = expandedMonths,
+    nextExpandedWeeks = expandedWeeks,
+    nextTestMode = testMode,
+    nextShowAnswers = showAnswers,
+    nextRandomHideMap = randomHideMap,
+    nextTodayWrongWords = todayWrongWords,
+    nextWeeklyWrongMap = weeklyWrongMap,
+    nextMonthlyWrongMap = monthlyWrongMap,
+    nextTestDirection = testDirection
+  ) {
+    return {
+      days: nextDays,
+      currentDay: nextCurrentDay,
+      reviewMode: nextReviewMode,
+      reviewTarget: nextReviewTarget,
+      expandedMonths: nextExpandedMonths,
+      expandedWeeks: nextExpandedWeeks,
+      testMode: nextTestMode,
+      showAnswers: nextShowAnswers,
+      randomHideMap: nextRandomHideMap,
+      todayWrongWords: nextTodayWrongWords,
+      weeklyWrongMap: nextWeeklyWrongMap,
+      monthlyWrongMap: nextMonthlyWrongMap,
+      testDirection: nextTestDirection,
+    };
+  }
+
+  async function saveToCloud(state, targetUser = user) {
+    if (!targetUser) return;
+
+    const userIdKey = String(targetUser.id);
+
+    const { error } = await supabase
+      .from("vocab_state")
+      .upsert(
+        {
+          user_id: userIdKey,
+          data: state,
+        },
+        { onConflict: "user_id" }
+      );
+
+    if (error) {
+      console.error("클라우드 저장 실패:", error);
+      setStatusMessage("클라우드 저장 실패");
+    }
+  }
+
+  async function persistState(
+    nextDays,
+    nextCurrentDay = currentDay,
+    nextReviewMode = reviewMode,
+    nextReviewTarget = reviewTarget,
+    nextExpandedMonths = expandedMonths,
+    nextExpandedWeeks = expandedWeeks,
+    nextTestMode = testMode,
+    nextShowAnswers = showAnswers,
+    nextRandomHideMap = randomHideMap,
+    nextTodayWrongWords = todayWrongWords,
+    nextWeeklyWrongMap = weeklyWrongMap,
+    nextMonthlyWrongMap = monthlyWrongMap,
+    nextTestDirection = testDirection
+  ) {
+    const state = buildState(
+      nextDays,
+      nextCurrentDay,
+      nextReviewMode,
+      nextReviewTarget,
+      nextExpandedMonths,
+      nextExpandedWeeks,
+      nextTestMode,
+      nextShowAnswers,
+      nextRandomHideMap,
+      nextTodayWrongWords,
+      nextWeeklyWrongMap,
+      nextMonthlyWrongMap,
+      nextTestDirection
     );
-  };
 
-  const handleNumberClick = (index) => {
-    if (reviewMode) return;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    await saveToCloud(state);
+  }
 
-    updateCurrentDayWords((words) => {
-      const updated = [...words];
+  async function loadFromCloud(targetUser = user) {
+    if (!targetUser) return;
+
+    const userIdKey = String(targetUser.id);
+
+    const { data, error } = await supabase
+      .from("vocab_state")
+      .select("data")
+      .eq("user_id", userIdKey)
+      .maybeSingle();
+
+    if (error) {
+      console.error("클라우드 불러오기 실패:", error);
+      setCloudLoaded(true);
+      return;
+    }
+
+    const saved = data?.data;
+
+    if (saved && saved.days && saved.days.length >= 300) {
+      setDays(saved.days);
+      setCurrentDay(saved.currentDay || 1);
+      setReviewMode(saved.reviewMode || false);
+      setReviewTarget(saved.reviewTarget || { type: "week", value: 1 });
+      setExpandedMonths(saved.expandedMonths || { 1: true });
+      setExpandedWeeks(saved.expandedWeeks || { 1: true });
+      setTestMode(saved.testMode || "none");
+      setShowAnswers(saved.showAnswers || false);
+      setRandomHideMap(saved.randomHideMap || buildRandomHideMap(WORDS_PER_DAY));
+      setTodayWrongWords(saved.todayWrongWords || []);
+      setWeeklyWrongMap(saved.weeklyWrongMap || {});
+      setMonthlyWrongMap(saved.monthlyWrongMap || {});
+      setTestDirection(saved.testDirection || "meaningToWord");
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+    } else {
+      const freshDays = createInitialDays();
+      const freshState = {
+        days: freshDays,
+        currentDay: 1,
+        reviewMode: false,
+        reviewTarget: { type: "week", value: 1 },
+        expandedMonths: { 1: true },
+        expandedWeeks: { 1: true },
+        testMode: "none",
+        showAnswers: false,
+        randomHideMap: buildRandomHideMap(WORDS_PER_DAY),
+        todayWrongWords: [],
+        weeklyWrongMap: {},
+        monthlyWrongMap: {},
+        testDirection: "meaningToWord",
+      };
+
+      setDays(freshState.days);
+      setCurrentDay(1);
+      setReviewMode(freshState.reviewMode);
+      setReviewTarget(freshState.reviewTarget);
+      setExpandedMonths(freshState.expandedMonths);
+      setExpandedWeeks(freshState.expandedWeeks);
+      setTestMode(freshState.testMode);
+      setShowAnswers(freshState.showAnswers);
+      setRandomHideMap(freshState.randomHideMap);
+      setTodayWrongWords(freshState.todayWrongWords);
+      setWeeklyWrongMap(freshState.weeklyWrongMap);
+      setMonthlyWrongMap(freshState.monthlyWrongMap);
+      setTestDirection(freshState.testDirection);
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(freshState));
+      await saveToCloud(freshState, targetUser);
+    }
+
+    setCloudLoaded(true);
+  }
+
+  useEffect(() => {
+    if (user) {
+      setCloudLoaded(false);
+      loadFromCloud(user);
+    }
+  }, [user]);
+
+  const handleNumberClick = async (index) => {
+    if (reviewMode || testSession) return;
+
+    const nextDays = days.map((dayData) => {
+      if (dayData.day !== currentDay) return dayData;
+
+      const updated = [...dayData.words];
       const current = updated[index].colorIndex;
+
       updated[index] = {
         ...updated[index],
         colorIndex: current === -1 ? 0 : (current + 1) % rainbowColors.length,
       };
-      return updated;
+
+      return { ...dayData, words: updated };
     });
+
+    setDays(nextDays);
+    await persistState(nextDays);
   };
 
-  const handleChange = (index, field, value) => {
-    if (reviewMode) return;
+  const handleChange = async (index, field, value) => {
+    if (reviewMode || testSession) return;
 
-    updateCurrentDayWords((words) => {
-      const updated = [...words];
+    const nextDays = days.map((dayData) => {
+      if (dayData.day !== currentDay) return dayData;
+
+      const updated = [...dayData.words];
       updated[index] = { ...updated[index], [field]: value };
-      return updated;
+
+      return { ...dayData, words: updated };
     });
+
+    setDays(nextDays);
+    await persistState(nextDays);
   };
 
-  const markAsCorrect = (index) => {
-    if (reviewMode) return;
+  const markAsCorrect = async (index) => {
+    if (reviewMode || testSession) return;
 
-    updateCurrentDayWords((words) => {
-      const updated = [...words];
+    const nextDays = days.map((dayData) => {
+      if (dayData.day !== currentDay) return dayData;
+
+      const updated = [...dayData.words];
       updated[index] = { ...updated[index], colorIndex: -1 };
-      return updated;
+
+      return { ...dayData, words: updated };
     });
+
+    setDays(nextDays);
+    await persistState(nextDays);
   };
 
-  const applyBulkPaste = () => {
-    if (reviewMode) return;
+  const applyBulkPaste = async () => {
+    if (reviewMode || testSession) return;
 
     const lines = bulkText
       .split(/\r?\n/)
@@ -306,8 +561,10 @@ export default function App() {
       .filter(Boolean)
       .slice(0, WORDS_PER_DAY);
 
-    updateCurrentDayWords((words) => {
-      const updated = [...words];
+    const nextDays = days.map((dayData) => {
+      if (dayData.day !== currentDay) return dayData;
+
+      const updated = [...dayData.words];
 
       lines.forEach((line, i) => {
         const parts = line.includes("\t") ? line.split("\t") : line.split(/\s*,\s*/);
@@ -319,29 +576,56 @@ export default function App() {
         };
       });
 
-      return updated;
+      return { ...dayData, words: updated };
     });
+
+    setDays(nextDays);
+    await persistState(nextDays);
   };
 
-  const addNextDay = () => {
-    const nextDay = days.length + 1;
-    const nextWeek = Math.floor((nextDay - 1) / 7) + 1;
-    const nextMonth = Math.floor((nextDay - 1) / 30) + 1;
+  const addNextDay = async () => {
+    const nextDay = Math.min(currentDay + 1, days.length);
+    const nextWeek = getWeekFromDay(nextDay);
+    const nextMonth = getMonthFromDay(nextDay);
 
-    setDays((prev) => [...prev, createDay(nextDay)]);
+    const nextExpandedMonths = { ...expandedMonths, [nextMonth]: true };
+    const nextExpandedWeeks = { ...expandedWeeks, [nextWeek]: true };
+    const nextReviewTarget = { type: "week", value: nextWeek };
+
     setCurrentDay(nextDay);
     setReviewMode(false);
-    setReviewTarget({ type: "week", value: nextWeek });
-    setExpandedMonths((prev) => ({ ...prev, [nextMonth]: true }));
-    setExpandedWeeks((prev) => ({ ...prev, [nextWeek]: true }));
+    setReviewTarget(nextReviewTarget);
+    setExpandedMonths(nextExpandedMonths);
+    setExpandedWeeks(nextExpandedWeeks);
     setBulkText("");
+    closeTestSession();
+
+    await persistState(
+      days,
+      nextDay,
+      false,
+      nextReviewTarget,
+      nextExpandedMonths,
+      nextExpandedWeeks,
+      testMode,
+      showAnswers,
+      randomHideMap,
+      todayWrongWords,
+      weeklyWrongMap,
+      monthlyWrongMap,
+      testDirection
+    );
   };
 
-  const resetCurrentDay = () => {
-    if (reviewMode) return;
-    setDays((prev) =>
-      prev.map((dayData) => (dayData.day === currentDay ? createDay(currentDay) : dayData))
+  const resetCurrentDay = async () => {
+    if (reviewMode || testSession) return;
+
+    const nextDays = days.map((dayData) =>
+      dayData.day === currentDay ? createDay(currentDay, true) : dayData
     );
+
+    setDays(nextDays);
+    await persistState(nextDays);
   };
 
   const toggleMonth = (month) => {
@@ -391,6 +675,290 @@ export default function App() {
     utterance.rate = 0.9;
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
+  }
+
+  function closeTestSession() {
+    setTestSession(null);
+    setTestInput("");
+    setTestChecked(false);
+    setTestFeedback(null);
+  }
+
+  function startTestSession(type, items, title) {
+    const normalizedItems = shuffleArray(
+      items
+        .filter((item) => item.word?.trim() || item.meaning?.trim())
+        .map((item) => enrichWord(item, item.originDay || item.day || currentDay))
+    );
+
+    if (normalizedItems.length === 0) {
+      alert("출제할 단어가 없습니다.");
+      return;
+    }
+
+    setReviewMode(false);
+    setMenuOpen(false);
+    setShowAnswers(false);
+    setTestSession({
+      type,
+      title,
+      items: normalizedItems,
+      currentIndex: 0,
+      correctCount: 0,
+      wrongItems: [],
+      finished: false,
+    });
+    setTestInput("");
+    setTestChecked(false);
+    setTestFeedback(null);
+  }
+
+  function startDailyTest() {
+    startTestSession("daily", currentDayData.words, `${currentDay}일차 랜덤 테스트`);
+  }
+
+  function startTodayWrongTest() {
+    startTestSession("dailyWrong", todayWrongWords, `${currentDay}일차 오답 테스트`);
+  }
+
+  function startWeeklyWrongTest(weekNumber) {
+    const items = weeklyWrongMap[weekNumber] || [];
+    startTestSession("weeklyWrong", items, `${weekNumber}주차 오답 테스트`);
+  }
+
+  function startMonthlyWrongTest(monthNumber) {
+    const items = monthlyWrongMap[monthNumber] || [];
+    startTestSession("monthlyWrong", items, `${monthNumber}달차 오답 테스트`);
+  }
+
+  async function finalizeTestSession(session) {
+    if (!session) return;
+
+    const wrongItems = session.wrongItems || [];
+
+    if (session.type === "daily") {
+      const nextTodayWrongWords = mergeUniqueWords([], wrongItems);
+      setTodayWrongWords(nextTodayWrongWords);
+
+      await persistState(
+        days,
+        currentDay,
+        reviewMode,
+        reviewTarget,
+        expandedMonths,
+        expandedWeeks,
+        testMode,
+        showAnswers,
+        randomHideMap,
+        nextTodayWrongWords,
+        weeklyWrongMap,
+        monthlyWrongMap,
+        testDirection
+      );
+    }
+
+    if (session.type === "dailyWrong") {
+      const week = currentWeek;
+      const prevWeekWords = weeklyWrongMap[week] || [];
+      const nextWeekWords = mergeUniqueWords(prevWeekWords, wrongItems);
+      const nextWeeklyWrongMap = {
+        ...weeklyWrongMap,
+        [week]: nextWeekWords,
+      };
+
+      setWeeklyWrongMap(nextWeeklyWrongMap);
+      setTodayWrongWords([]);
+
+      await persistState(
+        days,
+        currentDay,
+        reviewMode,
+        reviewTarget,
+        expandedMonths,
+        expandedWeeks,
+        testMode,
+        showAnswers,
+        randomHideMap,
+        [],
+        nextWeeklyWrongMap,
+        monthlyWrongMap,
+        testDirection
+      );
+    }
+
+    if (session.type === "weeklyWrong") {
+      const week = currentWeek;
+      const month = currentMonth;
+      const prevMonthWords = monthlyWrongMap[month] || [];
+      const nextMonthWords = mergeUniqueWords(prevMonthWords, wrongItems);
+
+      const nextWeeklyWrongMap = {
+        ...weeklyWrongMap,
+        [week]: [],
+      };
+
+      const nextMonthlyWrongMap = {
+        ...monthlyWrongMap,
+        [month]: nextMonthWords,
+      };
+
+      setWeeklyWrongMap(nextWeeklyWrongMap);
+      setMonthlyWrongMap(nextMonthlyWrongMap);
+
+      await persistState(
+        days,
+        currentDay,
+        reviewMode,
+        reviewTarget,
+        expandedMonths,
+        expandedWeeks,
+        testMode,
+        showAnswers,
+        randomHideMap,
+        todayWrongWords,
+        nextWeeklyWrongMap,
+        nextMonthlyWrongMap,
+        testDirection
+      );
+    }
+
+    if (session.type === "monthlyWrong") {
+      const month = currentMonth;
+      const nextMonthlyWrongMap = {
+        ...monthlyWrongMap,
+        [month]: wrongItems,
+      };
+
+      setMonthlyWrongMap(nextMonthlyWrongMap);
+
+      await persistState(
+        days,
+        currentDay,
+        reviewMode,
+        reviewTarget,
+        expandedMonths,
+        expandedWeeks,
+        testMode,
+        showAnswers,
+        randomHideMap,
+        todayWrongWords,
+        weeklyWrongMap,
+        nextMonthlyWrongMap,
+        testDirection
+      );
+    }
+  }
+
+  function handleTestCheck() {
+    if (!testSession || !currentTestItem || testChecked) return;
+
+    const correct = isAnswerCorrect(testInput, currentTestItem, testDirection);
+
+    setTestChecked(true);
+    setTestFeedback({
+      correct,
+      correctAnswer:
+        testDirection === "meaningToWord"
+          ? currentTestItem.word
+          : currentTestItem.meaning,
+    });
+  }
+
+  async function handleTestNext() {
+    if (!testSession || !currentTestItem || !testChecked || !testFeedback) return;
+
+    const isCorrect = testFeedback.correct;
+    const nextCorrectCount = testSession.correctCount + (isCorrect ? 1 : 0);
+    const nextWrongItems = isCorrect
+      ? testSession.wrongItems
+      : [...testSession.wrongItems, currentTestItem];
+
+    const isLast = testSession.currentIndex >= testSession.items.length - 1;
+
+    if (isLast) {
+      const finishedSession = {
+        ...testSession,
+        correctCount: nextCorrectCount,
+        wrongItems: nextWrongItems,
+        finished: true,
+      };
+
+      setTestSession(finishedSession);
+      await finalizeTestSession(finishedSession);
+      setTestChecked(false);
+      setTestFeedback(null);
+      setTestInput("");
+      return;
+    }
+
+    setTestSession({
+      ...testSession,
+      correctCount: nextCorrectCount,
+      wrongItems: nextWrongItems,
+      currentIndex: testSession.currentIndex + 1,
+    });
+    setTestInput("");
+    setTestChecked(false);
+    setTestFeedback(null);
+  }
+
+  async function clearCloudState() {
+    if (!user) {
+      alert("로그인 후 사용하세요.");
+      return;
+    }
+
+    const userIdKey = String(user.id);
+
+    const { error } = await supabase
+      .from("vocab_state")
+      .delete()
+      .eq("user_id", userIdKey);
+
+    if (error) {
+      console.error(error);
+      alert("클라우드 초기화 실패");
+      return;
+    }
+
+    const freshDays = createInitialDays();
+
+    const freshState = {
+      days: freshDays,
+      currentDay: 1,
+      reviewMode: false,
+      reviewTarget: { type: "week", value: 1 },
+      expandedMonths: { 1: true },
+      expandedWeeks: { 1: true },
+      testMode: "none",
+      showAnswers: false,
+      randomHideMap: buildRandomHideMap(WORDS_PER_DAY),
+      todayWrongWords: [],
+      weeklyWrongMap: {},
+      monthlyWrongMap: {},
+      testDirection: "meaningToWord",
+    };
+
+    setDays(freshDays);
+    setCurrentDay(1);
+    setReviewMode(false);
+    setReviewTarget(freshState.reviewTarget);
+    setExpandedMonths(freshState.expandedMonths);
+    setExpandedWeeks(freshState.expandedWeeks);
+    setTestMode("none");
+    setShowAnswers(false);
+    setRandomHideMap(freshState.randomHideMap);
+    setTodayWrongWords([]);
+    setWeeklyWrongMap({});
+    setMonthlyWrongMap({});
+    setTestDirection("meaningToWord");
+    setBulkText("");
+    closeTestSession();
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(freshState));
+    await saveToCloud(freshState, user);
+
+    alert("완전 초기화 완료");
   }
 
   async function handleSignUp() {
@@ -456,6 +1024,7 @@ export default function App() {
       setUser(sessionUser);
       localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
       setStatusMessage(`${sessionUser.username} 로그인됨`);
+      await loadFromCloud(sessionUser);
       alert("회원가입 완료");
     } catch (e) {
       console.error(e);
@@ -516,6 +1085,7 @@ export default function App() {
       setUser(sessionUser);
       localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
       setStatusMessage(`${sessionUser.username} 로그인됨`);
+      await loadFromCloud(sessionUser);
       alert("로그인 성공");
     } catch (e) {
       console.error(e);
@@ -531,95 +1101,9 @@ export default function App() {
     localStorage.removeItem(SESSION_KEY);
     setCloudLoaded(false);
     setStatusMessage("로그인 안 됨");
+    closeTestSession();
     alert("로그아웃됨");
   }
-
-  async function saveToCloud(state) {
-  if (!user) return;
-
-  const { error } = await supabase
-    .from("vocab_state")
-    .upsert(
-      {
-        user_id: String(user.id),
-        data: state,
-      },
-      { onConflict: "user_id" }
-    );
-
-  if (error) {
-    console.error("클라우드 저장 실패:", error);
-  }
-}
-
-  async function loadFromCloud() {
-    if (!user) return;
-
-    const { data, error } = await supabase
-      .from("vocab_state")
-      .select("data")
-      .eq("user_id", user.id)
-      .limit(1);
-
-    if (error) {
-      console.error("클라우드 불러오기 실패:", error);
-      setCloudLoaded(true);
-      return;
-    }
-
-    if (data && data.length > 0 && data[0].data) {
-      const saved = data[0].data;
-
-      if (saved.days) setDays(saved.days);
-      if (saved.currentDay) setCurrentDay(saved.currentDay);
-      if (typeof saved.reviewMode === "boolean") setReviewMode(saved.reviewMode);
-      if (saved.reviewTarget) setReviewTarget(saved.reviewTarget);
-      if (saved.expandedMonths) setExpandedMonths(saved.expandedMonths);
-      if (saved.expandedWeeks) setExpandedWeeks(saved.expandedWeeks);
-      if (saved.testMode) setTestMode(saved.testMode);
-      if (typeof saved.showAnswers === "boolean") setShowAnswers(saved.showAnswers);
-      if (saved.randomHideMap) setRandomHideMap(saved.randomHideMap);
-    }
-
-    setCloudLoaded(true);
-  }
-
-  useEffect(() => {
-    if (user) {
-      setCloudLoaded(false);
-      loadFromCloud();
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (!user || !cloudLoaded) return;
-
-    const state = {
-      days,
-      currentDay,
-      reviewMode,
-      reviewTarget,
-      expandedMonths,
-      expandedWeeks,
-      testMode,
-      showAnswers,
-      randomHideMap,
-    };
-
-    saveToCloud(state);
-  }, [
-    user,
-    cloudLoaded,
-    days,
-    currentDay,
-    reviewMode,
-    reviewTarget,
-    expandedMonths,
-    expandedWeeks,
-    testMode,
-    showAnswers,
-    randomHideMap,
-  ]);
 
   const displayUsername = user?.username || "";
 
@@ -648,6 +1132,7 @@ export default function App() {
           style={drawerMainButtonStyle}
           onClick={() => {
             setReviewMode(false);
+            closeTestSession();
             setMenuOpen(false);
           }}
         >
@@ -665,24 +1150,26 @@ export default function App() {
                 <button onClick={() => toggleMonth(month.month)} style={toggleButtonStyle}>
                   {expandedMonths[month.month] ? "▼" : "▶"} {month.month}달차
                 </button>
+
                 <button
                   onClick={() => {
-                    setReviewTarget({ type: "month", value: month.month });
-                    setReviewMode(true);
-                    setMenuOpen(false);
+                    startMonthlyWrongTest(month.month);
                   }}
                   style={{
                     ...reviewPickButtonStyle,
-                    backgroundColor: isActiveReview("month", month.month) ? "#111" : "white",
-                    color: isActiveReview("month", month.month) ? "white" : "black",
+                    backgroundColor:
+                      (monthlyWrongMap[month.month] || []).length > 0 ? "#111" : "white",
+                    color:
+                      (monthlyWrongMap[month.month] || []).length > 0 ? "white" : "black",
                   }}
                 >
-                  복습
+                  월오답
                 </button>
               </div>
 
               <div style={metaTextStyle}>
-                {month.startDay}~{month.endDay}일 · 단어 {month.filledCount} · 오답 {month.wrongCount}
+                {month.startDay}~{month.endDay}일 · 단어 {month.filledCount} · 오답 {month.wrongCount} ·
+                월오답 {(monthlyWrongMap[month.month] || []).length}
               </div>
 
               {expandedMonths[month.month] && (
@@ -701,23 +1188,22 @@ export default function App() {
                         </button>
 
                         <button
-                          onClick={() => {
-                            setReviewTarget({ type: "week", value: week.week });
-                            setReviewMode(true);
-                            setMenuOpen(false);
-                          }}
+                          onClick={() => startWeeklyWrongTest(week.week)}
                           style={{
                             ...reviewPickButtonStyle,
-                            backgroundColor: isActiveReview("week", week.week) ? "#111" : "white",
-                            color: isActiveReview("week", week.week) ? "white" : "black",
+                            backgroundColor:
+                              (weeklyWrongMap[week.week] || []).length > 0 ? "#111" : "white",
+                            color:
+                              (weeklyWrongMap[week.week] || []).length > 0 ? "white" : "black",
                           }}
                         >
-                          복습
+                          주오답
                         </button>
                       </div>
 
                       <div style={metaTextStyle}>
-                        {week.startDay}~{week.endDay}일 · 단어 {week.filledCount} · 오답 {week.wrongCount}
+                        {week.startDay}~{week.endDay}일 · 단어 {week.filledCount} · 오답 {week.wrongCount} ·
+                        주오답 {(weeklyWrongMap[week.week] || []).length}
                       </div>
 
                       {expandedWeeks[week.week] && (
@@ -734,6 +1220,7 @@ export default function App() {
                                     setCurrentDay(dayData.day);
                                     setReviewMode(false);
                                     setBulkText("");
+                                    closeTestSession();
                                     setMenuOpen(false);
                                   }}
                                   style={{
@@ -753,6 +1240,7 @@ export default function App() {
                                   onClick={() => {
                                     setReviewTarget({ type: "day", value: dayData.day });
                                     setReviewMode(true);
+                                    closeTestSession();
                                     setMenuOpen(false);
                                   }}
                                   style={{
@@ -793,6 +1281,11 @@ export default function App() {
           {user ? (
             <>
               <div style={loggedBoxStyle}>로그인: {displayUsername}</div>
+
+              <button onClick={clearCloudState} style={toolbarButtonStyle}>
+                전체 초기화
+              </button>
+
               <button onClick={handleSignOut} style={toolbarButtonStyle}>
                 로그아웃
               </button>
@@ -827,174 +1320,408 @@ export default function App() {
         </div>
 
         <h1 style={{ color: "black", marginTop: 0 }}>
-          {reviewMode ? reviewLabel : `단어 암기 프로그램 (${currentDay}일차)`}
+          {testSession
+            ? testSession.title
+            : reviewMode
+            ? reviewLabel
+            : `단어 암기 프로그램 (${currentDay}일차)`}
         </h1>
+
+        <div style={badgeWrapStyle}>
+          <div style={infoBadgeStyle}>오늘 오답 {todayWrongWords.length}</div>
+          <div style={infoBadgeStyle}>{currentWeek}주차 오답 {currentWeeklyWrongCount}</div>
+          <div style={infoBadgeStyle}>{currentMonth}달차 오답 {currentMonthlyWrongCount}</div>
+        </div>
+
+        <div style={dayActionWrapStyle}>
+          <button onClick={addNextDay} style={toolbarButtonStyle}>
+            다음 일차 이동
+          </button>
+
+          <button
+            onClick={() => {
+              setReviewMode((prev) => !prev);
+              closeTestSession();
+            }}
+            style={toolbarButtonStyle}
+          >
+            {reviewMode ? "일반 보기로 돌아가기" : reviewLabel}
+          </button>
+
+          <button onClick={resetCurrentDay} style={toolbarButtonStyle}>
+            현재 일차 기본 단어 복원
+          </button>
+
+          <button onClick={installAsApp} style={toolbarButtonStyle}>
+            홈 화면에 추가
+          </button>
+        </div>
+
+        <div style={testToolbarStyle}>
+          <button onClick={startDailyTest} style={toolbarButtonStyle}>
+            오늘 30개 랜덤 테스트
+          </button>
+
+          <button
+            onClick={startTodayWrongTest}
+            style={{
+              ...toolbarButtonStyle,
+              backgroundColor: todayWrongWords.length > 0 ? "#111" : "white",
+              color: todayWrongWords.length > 0 ? "white" : "black",
+            }}
+          >
+            오늘 오답 테스트
+          </button>
+
+          <button
+            onClick={() => startWeeklyWrongTest(currentWeek)}
+            style={{
+              ...toolbarButtonStyle,
+              backgroundColor: currentWeeklyWrongCount > 0 ? "#111" : "white",
+              color: currentWeeklyWrongCount > 0 ? "white" : "black",
+            }}
+          >
+            현재 주차 오답 테스트
+          </button>
+
+          <button
+            onClick={() => startMonthlyWrongTest(currentMonth)}
+            style={{
+              ...toolbarButtonStyle,
+              backgroundColor: currentMonthlyWrongCount > 0 ? "#111" : "white",
+              color: currentMonthlyWrongCount > 0 ? "white" : "black",
+            }}
+          >
+            현재 달차 오답 테스트
+          </button>
+        </div>
 
         <div style={testToolbarStyle}>
           <button
             onClick={() => {
-              setTestMode("none");
-              setShowAnswers(false);
+              setTestDirection("meaningToWord");
             }}
             style={{
               ...toolbarButtonStyle,
-              backgroundColor: testMode === "none" ? "#111" : "white",
-              color: testMode === "none" ? "white" : "black",
+              backgroundColor: testDirection === "meaningToWord" ? "#111" : "white",
+              color: testDirection === "meaningToWord" ? "white" : "black",
             }}
           >
-            일반 모드
+            뜻 → 영어
           </button>
 
           <button
             onClick={() => {
-              setTestMode("hideMeaning");
-              setShowAnswers(false);
+              setTestDirection("wordToMeaning");
             }}
             style={{
               ...toolbarButtonStyle,
-              backgroundColor: testMode === "hideMeaning" ? "#111" : "white",
-              color: testMode === "hideMeaning" ? "white" : "black",
+              backgroundColor: testDirection === "wordToMeaning" ? "#111" : "white",
+              color: testDirection === "wordToMeaning" ? "white" : "black",
             }}
           >
-            뜻 숨기기
-          </button>
-
-          <button
-            onClick={() => {
-              setTestMode("hideWord");
-              setShowAnswers(false);
-            }}
-            style={{
-              ...toolbarButtonStyle,
-              backgroundColor: testMode === "hideWord" ? "#111" : "white",
-              color: testMode === "hideWord" ? "white" : "black",
-            }}
-          >
-            단어 숨기기
-          </button>
-
-          <button
-            onClick={shuffleRandomMode}
-            style={{
-              ...toolbarButtonStyle,
-              backgroundColor: testMode === "random" ? "#111" : "white",
-              color: testMode === "random" ? "white" : "black",
-            }}
-          >
-            랜덤 숨기기
-          </button>
-
-          <button onClick={() => setShowAnswers((prev) => !prev)} style={toolbarButtonStyle}>
-            {showAnswers ? "정답 가리기" : "정답 보기"}
+            영어 → 뜻
           </button>
         </div>
 
-        {!reviewMode && (
-          <div style={pasteBlockStyle}>
-            <textarea
-              value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
-              placeholder={`전체 복붙용 입력창
+        {testSession ? (
+          <div style={testPanelStyle}>
+            {testSession.finished ? (
+              <>
+                <div style={testTitleStyle}>테스트 완료</div>
+                <div style={testSummaryStyle}>
+                  총 {testSession.items.length}문제 · 정답 {testSession.correctCount}개 · 오답{" "}
+                  {testSession.wrongItems.length}개
+                </div>
+
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button onClick={closeTestSession} style={toolbarButtonStyle}>
+                    테스트 닫기
+                  </button>
+
+                  {testSession.type === "daily" && testSession.wrongItems.length > 0 && (
+                    <button onClick={startTodayWrongTest} style={toolbarButtonStyle}>
+                      오늘 오답 테스트 시작
+                    </button>
+                  )}
+
+                  {testSession.type === "dailyWrong" && (
+                    <button onClick={() => startWeeklyWrongTest(currentWeek)} style={toolbarButtonStyle}>
+                      현재 주차 오답 테스트
+                    </button>
+                  )}
+
+                  {testSession.type === "weeklyWrong" && (
+                    <button onClick={() => startMonthlyWrongTest(currentMonth)} style={toolbarButtonStyle}>
+                      현재 달차 오답 테스트
+                    </button>
+                  )}
+                </div>
+
+                {testSession.wrongItems.length > 0 && (
+                  <div style={{ marginTop: "14px" }}>
+                    <div style={{ fontWeight: "bold", marginBottom: "8px" }}>이번 테스트 오답</div>
+                    <div style={wrongListStyle}>
+                      {testSession.wrongItems.map((item, idx) => (
+                        <div key={`${wordKey(item)}-${idx}`} style={wrongItemStyle}>
+                          <div style={{ fontWeight: "bold" }}>{item.word}</div>
+                          <div style={metaTextStyle}>{item.meaning}</div>
+                          <div style={metaTextStyle}>원본 {item.originDay}일차</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div style={testHeaderRowStyle}>
+                  <div style={testTitleStyle}>{testSession.title}</div>
+                  <div style={testProgressStyle}>
+                    {testSession.currentIndex + 1} / {testSession.items.length}
+                  </div>
+                </div>
+
+                <div style={questionCardStyle}>
+                  <div style={questionLabelStyle}>
+                    {testDirection === "meaningToWord" ? "뜻" : "영어"}
+                  </div>
+                  <div style={questionTextStyle}>
+                    {testDirection === "meaningToWord"
+                      ? currentTestItem?.meaning
+                      : currentTestItem?.word}
+                  </div>
+
+                  {currentTestItem?.originDay && (
+                    <div style={metaTextStyle}>원본 {currentTestItem.originDay}일차</div>
+                  )}
+                </div>
+
+                <input
+                  value={testInput}
+                  onChange={(e) => setTestInput(e.target.value)}
+                  placeholder={
+                    testDirection === "meaningToWord"
+                      ? "영어 단어를 입력"
+                      : "뜻을 입력"
+                  }
+                  style={testInputStyle}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      if (!testChecked) handleTestCheck();
+                      else handleTestNext();
+                    }
+                  }}
+                />
+
+                {testChecked && testFeedback && (
+                  <div
+                    style={{
+                      ...feedbackBoxStyle,
+                      borderColor: testFeedback.correct ? "#1f8f4f" : "#c0392b",
+                      background: testFeedback.correct ? "#eefaf2" : "#fff3f1",
+                    }}
+                  >
+                    <div style={{ fontWeight: "bold" }}>
+                      {testFeedback.correct ? "정답" : "오답"}
+                    </div>
+                    {!testFeedback.correct && (
+                      <div style={{ marginTop: "4px" }}>
+                        정답: {testFeedback.correctAnswer}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  {!testChecked ? (
+                    <button onClick={handleTestCheck} style={toolbarButtonStyle}>
+                      채점
+                    </button>
+                  ) : (
+                    <button onClick={handleTestNext} style={toolbarButtonStyle}>
+                      다음 문제
+                    </button>
+                  )}
+
+                  <button onClick={closeTestSession} style={toolbarButtonStyle}>
+                    테스트 종료
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <>
+            <div style={testToolbarStyle}>
+              <button
+                onClick={() => {
+                  setTestMode("none");
+                  setShowAnswers(false);
+                }}
+                style={{
+                  ...toolbarButtonStyle,
+                  backgroundColor: testMode === "none" ? "#111" : "white",
+                  color: testMode === "none" ? "white" : "black",
+                }}
+              >
+                일반 모드
+              </button>
+
+              <button
+                onClick={() => {
+                  setTestMode("hideMeaning");
+                  setShowAnswers(false);
+                }}
+                style={{
+                  ...toolbarButtonStyle,
+                  backgroundColor: testMode === "hideMeaning" ? "#111" : "white",
+                  color: testMode === "hideMeaning" ? "white" : "black",
+                }}
+              >
+                뜻 숨기기
+              </button>
+
+              <button
+                onClick={() => {
+                  setTestMode("hideWord");
+                  setShowAnswers(false);
+                }}
+                style={{
+                  ...toolbarButtonStyle,
+                  backgroundColor: testMode === "hideWord" ? "#111" : "white",
+                  color: testMode === "hideWord" ? "white" : "black",
+                }}
+              >
+                단어 숨기기
+              </button>
+
+              <button
+                onClick={shuffleRandomMode}
+                style={{
+                  ...toolbarButtonStyle,
+                  backgroundColor: testMode === "random" ? "#111" : "white",
+                  color: testMode === "random" ? "white" : "black",
+                }}
+              >
+                랜덤 숨기기
+              </button>
+
+              <button onClick={() => setShowAnswers((prev) => !prev)} style={toolbarButtonStyle}>
+                {showAnswers ? "정답 가리기" : "정답 보기"}
+              </button>
+            </div>
+
+            {!reviewMode && (
+              <div style={pasteBlockStyle}>
+                <textarea
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  placeholder={`전체 복붙용 입력창
 형식 예시:
 a piece of cake\t아주 쉬운 일
 break the ice\t어색한 분위기를 깨다`}
-              style={textareaStyle}
-            />
+                  style={textareaStyle}
+                />
 
-            <button onClick={applyBulkPaste} style={{ ...actionButtonStyle, marginTop: "8px", maxWidth: "220px" }}>
-              전체 적용
-            </button>
-          </div>
-        )}
+                <button
+                  onClick={applyBulkPaste}
+                  style={{ ...actionButtonStyle, marginTop: "8px", maxWidth: "220px" }}
+                >
+                  전체 적용
+                </button>
+              </div>
+            )}
 
-        <div style={tableWrapStyle}>
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                <th style={{ ...thStyle, width: "42px" }}>
-                  {reviewMode ? "일" : "번호"}
-                </th>
-                <th style={wordThStyle}>단어</th>
-                <th style={meaningThStyle}>뜻</th>
-                <th style={{ ...thStyle, width: "54px" }}>발음</th>
-                {!reviewMode && <th style={{ ...thStyle, width: "58px" }}>정답</th>}
-              </tr>
-            </thead>
-
-            <tbody>
-              {displayRows.map((item, index) => {
-                const color = item.colorIndex === -1 ? "black" : rainbowColors[item.colorIndex];
-
-                const hiddenType = getHiddenType(index);
-                const hideWord = testMode !== "none" && hiddenType === "word" && !showAnswers;
-                const hideMeaning =
-                  testMode !== "none" && hiddenType === "meaning" && !showAnswers;
-
-                return (
-                  <tr key={reviewMode ? `${item.day}-${item.id}-${index}` : item.id}>
-                    <td
-                      style={{
-                        ...smallTdStyle,
-                        color,
-                        fontWeight: "bold",
-                        cursor: reviewMode ? "default" : "pointer",
-                      }}
-                      onClick={() => handleNumberClick(index)}
-                    >
-                      {reviewMode ? item.day : item.id}
-                    </td>
-
-                    <td style={{ ...wordTdStyle, color, fontWeight: "bold" }}>
-                      {reviewMode ? (
-                        hideWord ? <span style={hiddenTextStyle}>????</span> : item.word || "-"
-                      ) : hideWord ? (
-                        <span style={hiddenTextStyle}>????</span>
-                      ) : (
-                        <input
-                          value={item.word}
-                          onChange={(e) => handleChange(index, "word", e.target.value)}
-                          style={{ ...compactInputStyle, color }}
-                        />
-                      )}
-                    </td>
-
-                    <td style={{ ...meaningTdStyle, color, fontWeight: "bold" }}>
-                      {reviewMode ? (
-                        hideMeaning ? (
-                          <span style={hiddenTextStyle}>????</span>
-                        ) : (
-                          item.meaning || "-"
-                        )
-                      ) : hideMeaning ? (
-                        <span style={hiddenTextStyle}>????</span>
-                      ) : (
-                        <input
-                          value={item.meaning}
-                          onChange={(e) => handleChange(index, "meaning", e.target.value)}
-                          style={{ ...compactInputStyle, color }}
-                        />
-                      )}
-                    </td>
-
-                    <td style={smallTdStyle}>
-                      <button onClick={() => speakWord(item.word)} style={tinyButtonStyle}>
-                        🔊
-                      </button>
-                    </td>
-
-                    {!reviewMode && (
-                      <td style={smallTdStyle}>
-                        <button onClick={() => markAsCorrect(index)} style={tinyButtonStyle}>
-                          정답
-                        </button>
-                      </td>
-                    )}
+            <div style={tableWrapStyle}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={{ ...thStyle, width: "42px" }}>
+                      {reviewMode ? "일" : "번호"}
+                    </th>
+                    <th style={wordThStyle}>단어</th>
+                    <th style={meaningThStyle}>뜻</th>
+                    <th style={{ ...thStyle, width: "54px" }}>발음</th>
+                    {!reviewMode && <th style={{ ...thStyle, width: "58px" }}>정답</th>}
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+
+                <tbody>
+                  {displayRows.map((item, index) => {
+                    const color = item.colorIndex === -1 ? "black" : rainbowColors[item.colorIndex];
+                    const hiddenType = getHiddenType(index);
+                    const hideWord = testMode !== "none" && hiddenType === "word" && !showAnswers;
+                    const hideMeaning =
+                      testMode !== "none" && hiddenType === "meaning" && !showAnswers;
+
+                    return (
+                      <tr key={reviewMode ? `${item.day}-${item.id}-${index}` : item.id}>
+                        <td
+                          style={{
+                            ...smallTdStyle,
+                            color,
+                            fontWeight: "bold",
+                            cursor: reviewMode ? "default" : "pointer",
+                          }}
+                          onClick={() => handleNumberClick(index)}
+                        >
+                          {reviewMode ? item.day : item.id}
+                        </td>
+
+                        <td style={{ ...wordTdStyle, color, fontWeight: "bold" }}>
+                          {reviewMode ? (
+                            hideWord ? <span style={hiddenTextStyle}>????</span> : item.word || "-"
+                          ) : hideWord ? (
+                            <span style={hiddenTextStyle}>????</span>
+                          ) : (
+                            <input
+                              value={item.word}
+                              onChange={(e) => handleChange(index, "word", e.target.value)}
+                              style={{ ...compactInputStyle, color }}
+                            />
+                          )}
+                        </td>
+
+                        <td style={{ ...meaningTdStyle, color, fontWeight: "bold" }}>
+                          {reviewMode ? (
+                            hideMeaning ? (
+                              <span style={hiddenTextStyle}>????</span>
+                            ) : (
+                              item.meaning || "-"
+                            )
+                          ) : hideMeaning ? (
+                            <span style={hiddenTextStyle}>????</span>
+                          ) : (
+                            <input
+                              value={item.meaning}
+                              onChange={(e) => handleChange(index, "meaning", e.target.value)}
+                              style={{ ...compactInputStyle, color }}
+                            />
+                          )}
+                        </td>
+
+                        <td style={smallTdStyle}>
+                          <button onClick={() => speakWord(item.word)} style={tinyButtonStyle}>
+                            🔊
+                          </button>
+                        </td>
+
+                        {!reviewMode && (
+                          <td style={smallTdStyle}>
+                            <button onClick={() => markAsCorrect(index)} style={tinyButtonStyle}>
+                              정답
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </main>
     </div>
   );
@@ -1189,14 +1916,14 @@ const actionButtonStyle = {
   boxSizing: "border-box",
 };
 
-const infoTextStyle = {
-  marginTop: "16px",
-  fontSize: "12px",
-  color: "#555",
-  lineHeight: 1.6,
+const testToolbarStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "6px",
+  marginBottom: "14px",
 };
 
-const testToolbarStyle = {
+const dayActionWrapStyle = {
   display: "flex",
   flexWrap: "wrap",
   gap: "6px",
@@ -1328,4 +2055,102 @@ const authInputStyle = {
   borderRadius: "8px",
   minWidth: "120px",
   flex: "1 1 140px",
+};
+
+const badgeWrapStyle = {
+  display: "flex",
+  gap: "8px",
+  flexWrap: "wrap",
+  marginBottom: "14px",
+};
+
+const infoBadgeStyle = {
+  padding: "8px 10px",
+  border: "1px solid #ddd",
+  borderRadius: "999px",
+  background: "white",
+  fontSize: "12px",
+};
+
+const testPanelStyle = {
+  border: "1px solid #ddd",
+  borderRadius: "12px",
+  padding: "14px",
+  background: "white",
+  marginBottom: "16px",
+};
+
+const testHeaderRowStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "8px",
+  marginBottom: "12px",
+  flexWrap: "wrap",
+};
+
+const testTitleStyle = {
+  fontWeight: "bold",
+  fontSize: "18px",
+};
+
+const testProgressStyle = {
+  fontSize: "13px",
+  opacity: 0.8,
+};
+
+const questionCardStyle = {
+  border: "1px solid #ddd",
+  borderRadius: "10px",
+  background: "#fafafa",
+  padding: "14px",
+  marginBottom: "12px",
+};
+
+const questionLabelStyle = {
+  fontSize: "12px",
+  opacity: 0.7,
+  marginBottom: "6px",
+};
+
+const questionTextStyle = {
+  fontWeight: "bold",
+  fontSize: "20px",
+  marginBottom: "8px",
+  lineHeight: 1.4,
+};
+
+const testInputStyle = {
+  width: "100%",
+  padding: "12px",
+  border: "1px solid #ccc",
+  borderRadius: "10px",
+  boxSizing: "border-box",
+  marginBottom: "12px",
+  fontSize: "15px",
+};
+
+const feedbackBoxStyle = {
+  border: "1px solid #ddd",
+  borderRadius: "10px",
+  padding: "12px",
+  marginBottom: "12px",
+};
+
+const testSummaryStyle = {
+  marginBottom: "12px",
+  fontSize: "14px",
+};
+
+const wrongListStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: "8px",
+};
+
+const wrongItemStyle = {
+  border: "1px solid #ddd",
+  borderRadius: "10px",
+  padding: "10px",
+  background: "#fafafa",
 };
