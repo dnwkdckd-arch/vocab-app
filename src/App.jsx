@@ -535,17 +535,22 @@ export default function App() {
   }
 
   async function saveToCloud(state) {
-    if (!user) return;
+  if (!user) return;
 
-    const { error } = await supabase.from("vocab_state").upsert({
-      user_id: user.id,
-      data: state,
-    });
+  const { error } = await supabase
+    .from("vocab_state")
+    .upsert(
+      {
+        user_id: String(user.id),
+        data: state,
+      },
+      { onConflict: "user_id" }
+    );
 
-    if (error) {
-      console.error("클라우드 저장 실패:", error);
-    }
+  if (error) {
+    console.error("클라우드 저장 실패:", error);
   }
+}
 
   async function loadFromCloud() {
     if (!user) return;
