@@ -2070,6 +2070,8 @@ const infoBadgeStyle = {
   borderRadius: "999px",
   background: "white",
   fontSize: "12px",
+  color: "black",
+  fontWeight: "bold",
 };
 
 const testPanelStyle = {
