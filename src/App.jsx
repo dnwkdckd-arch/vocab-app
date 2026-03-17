@@ -102,11 +102,6 @@ function mergeUniqueWords(base = [], incoming = []) {
   return Array.from(map.values());
 }
 
-function removeWordsByKeys(base = [], keysToRemove = []) {
-  const keySet = new Set(keysToRemove);
-  return base.filter((item) => !keySet.has(wordKey(item)));
-}
-
 function isAnswerCorrect(userAnswer, item, direction) {
   const input = normalizeText(userAnswer);
 
@@ -164,6 +159,8 @@ export default function App() {
   const [testInput, setTestInput] = useState("");
   const [testChecked, setTestChecked] = useState(false);
   const [testFeedback, setTestFeedback] = useState(null);
+
+  const [showStudyOptions, setShowStudyOptions] = useState(false);
 
   useEffect(() => {
     try {
@@ -714,7 +711,7 @@ export default function App() {
   }
 
   function startDailyTest() {
-    startTestSession("daily", currentDayData.words, `${currentDay}일차 랜덤 테스트`);
+    startTestSession("daily", currentDayData.words, `${currentDay}일차 테스트`);
   }
 
   function startTodayWrongTest() {
@@ -1335,7 +1332,7 @@ export default function App() {
 
         <div style={dayActionWrapStyle}>
           <button onClick={addNextDay} style={toolbarButtonStyle}>
-            다음 일차 이동
+            다음 일차
           </button>
 
           <button
@@ -1345,11 +1342,11 @@ export default function App() {
             }}
             style={toolbarButtonStyle}
           >
-            {reviewMode ? "일반 보기로 돌아가기" : reviewLabel}
+            {reviewMode ? "일반 보기" : reviewLabel}
           </button>
 
           <button onClick={resetCurrentDay} style={toolbarButtonStyle}>
-            현재 일차 기본 단어 복원
+            기본값 복원
           </button>
 
           <button onClick={installAsApp} style={toolbarButtonStyle}>
@@ -1359,7 +1356,7 @@ export default function App() {
 
         <div style={testToolbarStyle}>
           <button onClick={startDailyTest} style={toolbarButtonStyle}>
-            오늘 30개 랜덤 테스트
+            오늘 테스트
           </button>
 
           <button
@@ -1370,7 +1367,7 @@ export default function App() {
               color: todayWrongWords.length > 0 ? "white" : "black",
             }}
           >
-            오늘 오답 테스트
+            오늘 오답
           </button>
 
           <button
@@ -1381,7 +1378,7 @@ export default function App() {
               color: currentWeeklyWrongCount > 0 ? "white" : "black",
             }}
           >
-            현재 주차 오답 테스트
+            주간 오답
           </button>
 
           <button
@@ -1392,7 +1389,7 @@ export default function App() {
               color: currentMonthlyWrongCount > 0 ? "white" : "black",
             }}
           >
-            현재 달차 오답 테스트
+            월간 오답
           </button>
         </div>
 
@@ -1407,7 +1404,7 @@ export default function App() {
               color: testDirection === "meaningToWord" ? "white" : "black",
             }}
           >
-            뜻 → 영어
+            뜻 보고 영어 쓰기
           </button>
 
           <button
@@ -1420,7 +1417,7 @@ export default function App() {
               color: testDirection === "wordToMeaning" ? "white" : "black",
             }}
           >
-            영어 → 뜻
+            영어 보고 뜻 쓰기
           </button>
         </div>
 
@@ -1441,19 +1438,19 @@ export default function App() {
 
                   {testSession.type === "daily" && testSession.wrongItems.length > 0 && (
                     <button onClick={startTodayWrongTest} style={toolbarButtonStyle}>
-                      오늘 오답 테스트 시작
+                      오늘 오답 테스트
                     </button>
                   )}
 
                   {testSession.type === "dailyWrong" && (
                     <button onClick={() => startWeeklyWrongTest(currentWeek)} style={toolbarButtonStyle}>
-                      현재 주차 오답 테스트
+                      주간 오답 테스트
                     </button>
                   )}
 
                   {testSession.type === "weeklyWrong" && (
                     <button onClick={() => startMonthlyWrongTest(currentMonth)} style={toolbarButtonStyle}>
-                      현재 달차 오답 테스트
+                      월간 오답 테스트
                     </button>
                   )}
                 </div>
@@ -1553,63 +1550,84 @@ export default function App() {
           </div>
         ) : (
           <>
-            <div style={testToolbarStyle}>
+            <div style={sectionWrapStyle}>
               <button
-                onClick={() => {
-                  setTestMode("none");
-                  setShowAnswers(false);
-                }}
+                onClick={() => setShowStudyOptions((prev) => !prev)}
                 style={{
                   ...toolbarButtonStyle,
-                  backgroundColor: testMode === "none" ? "#111" : "white",
-                  color: testMode === "none" ? "white" : "black",
+                  width: "100%",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
                 }}
               >
-                일반 모드
+                <span>학습 보기</span>
+                <span>{showStudyOptions ? "▲" : "▼"}</span>
               </button>
 
-              <button
-                onClick={() => {
-                  setTestMode("hideMeaning");
-                  setShowAnswers(false);
-                }}
-                style={{
-                  ...toolbarButtonStyle,
-                  backgroundColor: testMode === "hideMeaning" ? "#111" : "white",
-                  color: testMode === "hideMeaning" ? "white" : "black",
-                }}
-              >
-                뜻 숨기기
-              </button>
+              {showStudyOptions && (
+                <div style={studyOptionWrapStyle}>
+                  <button
+                    onClick={() => {
+                      setTestMode("none");
+                      setShowAnswers(false);
+                    }}
+                    style={{
+                      ...toolbarButtonStyle,
+                      backgroundColor: testMode === "none" ? "#111" : "white",
+                      color: testMode === "none" ? "white" : "black",
+                    }}
+                  >
+                    일반
+                  </button>
 
-              <button
-                onClick={() => {
-                  setTestMode("hideWord");
-                  setShowAnswers(false);
-                }}
-                style={{
-                  ...toolbarButtonStyle,
-                  backgroundColor: testMode === "hideWord" ? "#111" : "white",
-                  color: testMode === "hideWord" ? "white" : "black",
-                }}
-              >
-                단어 숨기기
-              </button>
+                  <button
+                    onClick={() => {
+                      setTestMode("hideMeaning");
+                      setShowAnswers(false);
+                    }}
+                    style={{
+                      ...toolbarButtonStyle,
+                      backgroundColor: testMode === "hideMeaning" ? "#111" : "white",
+                      color: testMode === "hideMeaning" ? "white" : "black",
+                    }}
+                  >
+                    뜻 숨기기
+                  </button>
 
-              <button
-                onClick={shuffleRandomMode}
-                style={{
-                  ...toolbarButtonStyle,
-                  backgroundColor: testMode === "random" ? "#111" : "white",
-                  color: testMode === "random" ? "white" : "black",
-                }}
-              >
-                랜덤 숨기기
-              </button>
+                  <button
+                    onClick={() => {
+                      setTestMode("hideWord");
+                      setShowAnswers(false);
+                    }}
+                    style={{
+                      ...toolbarButtonStyle,
+                      backgroundColor: testMode === "hideWord" ? "#111" : "white",
+                      color: testMode === "hideWord" ? "white" : "black",
+                    }}
+                  >
+                    단어 숨기기
+                  </button>
 
-              <button onClick={() => setShowAnswers((prev) => !prev)} style={toolbarButtonStyle}>
-                {showAnswers ? "정답 가리기" : "정답 보기"}
-              </button>
+                  <button
+                    onClick={shuffleRandomMode}
+                    style={{
+                      ...toolbarButtonStyle,
+                      backgroundColor: testMode === "random" ? "#111" : "white",
+                      color: testMode === "random" ? "white" : "black",
+                    }}
+                  >
+                    랜덤
+                  </button>
+
+                  <button
+                    onClick={() => setShowAnswers((prev) => !prev)}
+                    style={toolbarButtonStyle}
+                  >
+                    {showAnswers ? "정답 숨기기" : "정답 보기"}
+                  </button>
+                </div>
+              )}
             </div>
 
             {!reviewMode && (
@@ -2155,4 +2173,15 @@ const wrongItemStyle = {
   borderRadius: "10px",
   padding: "10px",
   background: "#fafafa",
+};
+
+const sectionWrapStyle = {
+  marginBottom: "14px",
+};
+
+const studyOptionWrapStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "6px",
+  marginTop: "8px",
 };
