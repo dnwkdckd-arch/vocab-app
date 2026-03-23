@@ -711,7 +711,7 @@ export default function App() {
   }
 
   function startDailyTest() {
-    startTestSession("daily", currentDayData.words, `${currentDay}일차 테스트`);
+    startTestSession("daily", currentDayData.words, `${currentDay}일차 단어 테스트`);
   }
 
   function startTodayWrongTest() {
@@ -1393,34 +1393,6 @@ export default function App() {
           </button>
         </div>
 
-        <div style={testToolbarStyle}>
-          <button
-            onClick={() => {
-              setTestDirection("meaningToWord");
-            }}
-            style={{
-              ...toolbarButtonStyle,
-              backgroundColor: testDirection === "meaningToWord" ? "#111" : "white",
-              color: testDirection === "meaningToWord" ? "white" : "black",
-            }}
-          >
-            뜻 보고 영어 쓰기
-          </button>
-
-          <button
-            onClick={() => {
-              setTestDirection("wordToMeaning");
-            }}
-            style={{
-              ...toolbarButtonStyle,
-              backgroundColor: testDirection === "wordToMeaning" ? "#111" : "white",
-              color: testDirection === "wordToMeaning" ? "white" : "black",
-            }}
-          >
-            영어 보고 뜻 쓰기
-          </button>
-        </div>
-
         {testSession ? (
           <div style={testPanelStyle}>
             {testSession.finished ? (
@@ -1457,11 +1429,13 @@ export default function App() {
 
                 {testSession.wrongItems.length > 0 && (
                   <div style={{ marginTop: "14px" }}>
-                    <div style={{ fontWeight: "bold", marginBottom: "8px" }}>이번 테스트 오답</div>
+                    <div style={{ fontWeight: "bold", marginBottom: "8px", color: "black" }}>
+                      이번 테스트 오답
+                    </div>
                     <div style={wrongListStyle}>
                       {testSession.wrongItems.map((item, idx) => (
                         <div key={`${wordKey(item)}-${idx}`} style={wrongItemStyle}>
-                          <div style={{ fontWeight: "bold" }}>{item.word}</div>
+                          <div style={{ fontWeight: "bold", color: "black" }}>{item.word}</div>
                           <div style={metaTextStyle}>{item.meaning}</div>
                           <div style={metaTextStyle}>원본 {item.originDay}일차</div>
                         </div>
@@ -1477,6 +1451,30 @@ export default function App() {
                   <div style={testProgressStyle}>
                     {testSession.currentIndex + 1} / {testSession.items.length}
                   </div>
+                </div>
+
+                <div style={testDirectionInlineWrapStyle}>
+                  <button
+                    onClick={() => setTestDirection("meaningToWord")}
+                    style={{
+                      ...toolbarButtonStyle,
+                      backgroundColor: testDirection === "meaningToWord" ? "#111" : "white",
+                      color: testDirection === "meaningToWord" ? "white" : "black",
+                    }}
+                  >
+                    뜻 보고 영어 쓰기
+                  </button>
+
+                  <button
+                    onClick={() => setTestDirection("wordToMeaning")}
+                    style={{
+                      ...toolbarButtonStyle,
+                      backgroundColor: testDirection === "wordToMeaning" ? "#111" : "white",
+                      color: testDirection === "wordToMeaning" ? "white" : "black",
+                    }}
+                  >
+                    영어 보고 뜻 쓰기
+                  </button>
                 </div>
 
                 <div style={questionCardStyle}>
@@ -1499,8 +1497,8 @@ export default function App() {
                   onChange={(e) => setTestInput(e.target.value)}
                   placeholder={
                     testDirection === "meaningToWord"
-                      ? "영어 단어를 입력"
-                      : "뜻을 입력"
+                      ? "영어 단어를 입력하세요"
+                      : "뜻을 입력하세요"
                   }
                   style={testInputStyle}
                   onKeyDown={(e) => {
@@ -1519,11 +1517,11 @@ export default function App() {
                       background: testFeedback.correct ? "#eefaf2" : "#fff3f1",
                     }}
                   >
-                    <div style={{ fontWeight: "bold" }}>
+                    <div style={{ fontWeight: "bold", color: "black" }}>
                       {testFeedback.correct ? "정답" : "오답"}
                     </div>
                     {!testFeedback.correct && (
-                      <div style={{ marginTop: "4px" }}>
+                      <div style={{ marginTop: "4px", color: "black" }}>
                         정답: {testFeedback.correctAnswer}
                       </div>
                     )}
@@ -1841,6 +1839,7 @@ const loggedBoxStyle = {
 const metaTextStyle = {
   fontSize: "12px",
   opacity: 0.8,
+  color: "#555",
 };
 
 const monthRowStyle = {
@@ -2094,10 +2093,12 @@ const infoBadgeStyle = {
 
 const testPanelStyle = {
   border: "1px solid #ddd",
-  borderRadius: "12px",
-  padding: "14px",
+  borderRadius: "16px",
+  padding: "16px",
   background: "white",
   marginBottom: "16px",
+  maxWidth: "720px",
+  boxSizing: "border-box",
 };
 
 const testHeaderRowStyle = {
@@ -2112,42 +2113,51 @@ const testHeaderRowStyle = {
 const testTitleStyle = {
   fontWeight: "bold",
   fontSize: "18px",
+  color: "black",
 };
 
 const testProgressStyle = {
   fontSize: "13px",
   opacity: 0.8,
+  color: "#444",
 };
 
 const questionCardStyle = {
   border: "1px solid #ddd",
-  borderRadius: "10px",
-  background: "#fafafa",
-  padding: "14px",
+  borderRadius: "12px",
+  background: "white",
+  padding: "16px",
   marginBottom: "12px",
+  color: "black",
 };
 
 const questionLabelStyle = {
   fontSize: "12px",
-  opacity: 0.7,
-  marginBottom: "6px",
+  color: "#666",
+  marginBottom: "8px",
+  fontWeight: "bold",
 };
 
 const questionTextStyle = {
   fontWeight: "bold",
-  fontSize: "20px",
-  marginBottom: "8px",
+  fontSize: "28px",
+  marginBottom: "10px",
   lineHeight: 1.4,
+  color: "black",
+  wordBreak: "keep-all",
 };
 
 const testInputStyle = {
   width: "100%",
-  padding: "12px",
+  padding: "14px 12px",
   border: "1px solid #ccc",
   borderRadius: "10px",
   boxSizing: "border-box",
   marginBottom: "12px",
-  fontSize: "15px",
+  fontSize: "16px",
+  background: "white",
+  color: "black",
+  outline: "none",
 };
 
 const feedbackBoxStyle = {
@@ -2160,6 +2170,7 @@ const feedbackBoxStyle = {
 const testSummaryStyle = {
   marginBottom: "12px",
   fontSize: "14px",
+  color: "black",
 };
 
 const wrongListStyle = {
@@ -2184,4 +2195,11 @@ const studyOptionWrapStyle = {
   flexWrap: "wrap",
   gap: "6px",
   marginTop: "8px",
+};
+
+const testDirectionInlineWrapStyle = {
+  display: "flex",
+  gap: "8px",
+  flexWrap: "wrap",
+  marginBottom: "12px",
 };
