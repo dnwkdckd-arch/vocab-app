@@ -71,17 +71,124 @@ function normalizeText(text) {
     .replace(/\s+/g, " ");
 }
 
+function normalizeMeaningText(text) {
+  return normalizeText(text)
+    .replace(/\([^)]*\)/g, "")
+    .replace(/~/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function meaningTokens(text) {
   return String(text || "")
     .split(/[;/]/)
-    .map((v) => normalizeText(v))
+    .map((v) => normalizeMeaningText(v))
     .filter(Boolean);
 }
 
+const MEANING_SYNONYM_MAP = {
+  "받아들이다": ["수락하다", "인정하다"],
+  "대답하다": ["답하다", "응답하다"],
+  "도착하다": ["도착", "도달하다"],
+  "묻다": ["질문하다", "물어보다"],
+  "빌리다": ["대여하다"],
+  "가져오다": ["들고오다", "갖고오다"],
+  "선택하다": ["고르다"],
+  "결정하다": ["정하다"],
+  "끝내다": ["마치다", "완료하다"],
+  "설명하다": ["풀어서 말하다"],
+  "찾다": ["발견하다"],
+  "유지하다": ["계속하다", "지키다"],
+  "떠나다": ["출발하다"],
+  "만들다": ["제작하다", "생성하다"],
+  "만나다": ["보다", "대면하다"],
+  "지불하다": ["내다", "결제하다"],
+  "보여주다": ["제시하다"],
+  "말하다": ["이야기하다", "얘기하다", "전하다"],
+  "공부하다": ["학습하다"],
+  "노력하다": ["애쓰다", "시도하다"],
+  "이해하다": ["알아듣다", "파악하다"],
+  "사용하다": ["쓰다", "이용하다"],
+  "기다리다": ["대기하다"],
+  "걷다": ["걸어가다"],
+  "원하다": ["바라다"],
+  "일하다": ["근무하다"],
+  "조언": ["충고"],
+  "나타내다": ["보여주다"],
+  "의사소통하다": ["소통하다"],
+  "비교하다": ["견주다"],
+  "계속하다": ["지속하다"],
+  "어려운": ["힘든"],
+  "준비하다": ["대비하다"],
+  "깨닫다": ["알아차리다", "인지하다"],
+  "추천하다": ["권하다"],
+  "분석하다": ["해석하다"],
+  "가정하다": ["추정하다"],
+  "기여하다": ["도움이 되다"],
+  "설득하다": ["납득시키다"],
+  "평가하다": ["판단하다", "채점하다"],
+  "증거": ["근거"],
+  "영향": ["효과"],
+  "해석하다": ["풀이하다", "이해하다"],
+  "관련 있는": ["연관된"],
+  "중요한": ["핵심적인", "의미있는"],
+  "전략": ["계획"],
+  "추세": ["경향"],
+};
+
+function expandMeaningAliases(item) {
+  const baseTokens = [
+    ...meaningTokens(item.meaning),
+    ...((item.aliases || []).map((v) => normalizeMeaningText(v))),
+  ];
+
+  const result = new Set(baseTokens);
+
+  baseTokens.forEach((token) => {
+    const synonyms = MEANING_SYNONYM_MAP[token] || [];
+    synonyms.forEach((syn) => result.add(normalizeMeaningText(syn)));
+
+    if (token.endsWith("하다") && token.length > 2) {
+      result.add(token.slice(0, -2));
+    }
+    if (token.endsWith("되다") && token.length > 2) {
+      result.add(token.slice(0, -2));
+    }
+  });
+
+  return Array.from(result);
+}
+
+function isLooseMeaningMatch(input, token) {
+  if (input === token) return true;
+  if (input.length < 2 || token.length < 2) return false;
+  return token.includes(input) || input.includes(token);
+}
+
+function isAnswerCorrect(userAnswer, item, direction) {
+  const input = normalizeText(userAnswer);
+
+  if (!input) return false;
+
+  if (direction === "meaningToWord") {
+    const answerWord = normalizeText(item.word);
+    return input === answerWord;
+  }
+
+  const normalizedInput = normalizeMeaningText(input);
+  const acceptedMeanings = expandMeaningAliases(item);
+
+  if (acceptedMeanings.includes(normalizedInput)) return true;
+
+  return acceptedMeanings.some((token) =>
+    isLooseMeaningMatch(normalizedInput, token)
+  );
+}
+
 function wordKey(item) {
-  return `${item.originDay || item.day || 0}__${normalizeText(item.word)}__${normalizeText(
-    item.meaning
-  )}`;
+  return `${item.originDay || item.day || 0}__${normalizeText(
+    item.word
+  )}__${normalizeText(item.meaning)}`;
 }
 
 function enrichWord(item, fallbackDay) {
@@ -102,22 +209,33 @@ function mergeUniqueWords(base = [], incoming = []) {
   return Array.from(map.values());
 }
 
-function isAnswerCorrect(userAnswer, item, direction) {
-  const input = normalizeText(userAnswer);
+function enrichWrongItem(item, stage, targetValue) {
+  return {
+    ...enrichWord(item, item.originDay || item.day || 0),
+    wrongCount: (item.wrongCount || 0) + 1,
+    lastWrongStage: stage,
+    lastWrongTarget: targetValue,
+    lastWrongAt: Date.now(),
+  };
+}
 
-  if (!input) return false;
+function sortWrongWords(items = []) {
+  return [...items].sort((a, b) => {
+    const wrongDiff = (b.wrongCount || 0) - (a.wrongCount || 0);
+    if (wrongDiff !== 0) return wrongDiff;
+    return (b.lastWrongAt || 0) - (a.lastWrongAt || 0);
+  });
+}
 
-  if (direction === "meaningToWord") {
-    return input === normalizeText(item.word);
-  }
+function mergeUniqueWrongWords(base = [], incoming = []) {
+  const map = new Map();
 
-  const correctMeaning = normalizeText(item.meaning);
-  const tokens = meaningTokens(item.meaning);
+  [...base, ...incoming].forEach((item) => {
+    const normalized = enrichWord(item, item.originDay || item.day || 0);
+    map.set(wordKey(normalized), normalized);
+  });
 
-  if (input === correctMeaning) return true;
-  if (tokens.includes(input)) return true;
-
-  return tokens.some((token) => token.includes(input) || input.includes(token));
+  return sortWrongWords(Array.from(map.values()));
 }
 
 export default function App() {
@@ -238,7 +356,9 @@ export default function App() {
         const weekStart = (week - 1) * 7 + 1;
         const weekEnd = Math.min(week * 7, days.length);
 
-        const dayList = days.filter((d) => d.day >= weekStart && d.day <= weekEnd);
+        const dayList = days.filter(
+          (d) => d.day >= weekStart && d.day <= weekEnd
+        );
 
         const filledCount = dayList.reduce(
           (sum, d) => sum + d.words.filter((w) => w.word.trim()).length,
@@ -260,7 +380,9 @@ export default function App() {
         });
       }
 
-      const monthDays = days.filter((d) => d.day >= monthStart && d.day <= monthEnd);
+      const monthDays = days.filter(
+        (d) => d.day >= monthStart && d.day <= monthEnd
+      );
 
       const monthFilledCount = monthDays.reduce(
         (sum, d) => sum + d.words.filter((w) => w.word.trim()).length,
@@ -286,8 +408,10 @@ export default function App() {
   }, [days, totalMonths]);
 
   const reviewLabel = useMemo(() => {
-    if (reviewTarget.type === "day") return `${reviewTarget.value}일차 틀린 단어 복습`;
-    if (reviewTarget.type === "month") return `${reviewTarget.value}달차 틀린 단어 복습`;
+    if (reviewTarget.type === "day")
+      return `${reviewTarget.value}일차 틀린 단어 복습`;
+    if (reviewTarget.type === "month")
+      return `${reviewTarget.value}달차 틀린 단어 복습`;
     return `${reviewTarget.value}주차 틀린 단어 복습`;
   }, [reviewTarget]);
 
@@ -564,7 +688,9 @@ export default function App() {
       const updated = [...dayData.words];
 
       lines.forEach((line, i) => {
-        const parts = line.includes("\t") ? line.split("\t") : line.split(/\s*,\s*/);
+        const parts = line.includes("\t")
+          ? line.split("\t")
+          : line.split(/\s*,\s*/);
 
         updated[i] = {
           ...updated[i],
@@ -681,11 +807,13 @@ export default function App() {
     setTestFeedback(null);
   }
 
-  function startTestSession(type, items, title) {
+  function startTestSession(type, items, title, target = null) {
     const normalizedItems = shuffleArray(
       items
         .filter((item) => item.word?.trim() || item.meaning?.trim())
-        .map((item) => enrichWord(item, item.originDay || item.day || currentDay))
+        .map((item) =>
+          enrichWord(item, item.originDay || item.day || currentDay)
+        )
     );
 
     if (normalizedItems.length === 0) {
@@ -699,6 +827,7 @@ export default function App() {
     setTestSession({
       type,
       title,
+      target,
       items: normalizedItems,
       currentIndex: 0,
       correctCount: 0,
@@ -711,30 +840,48 @@ export default function App() {
   }
 
   function startDailyTest() {
-    startTestSession("daily", currentDayData.words, `${currentDay}일차 단어 테스트`);
+    startTestSession("daily", currentDayData.words, `${currentDay}일차 단어 테스트`, {
+      targetType: "day",
+      targetValue: currentDay,
+    });
   }
 
   function startTodayWrongTest() {
-    startTestSession("dailyWrong", todayWrongWords, `${currentDay}일차 오답 테스트`);
+    startTestSession(
+      "dailyWrong",
+      todayWrongWords,
+      `${currentDay}일차 오답 테스트`,
+      {
+        targetType: "day",
+        targetValue: currentDay,
+      }
+    );
   }
 
   function startWeeklyWrongTest(weekNumber) {
     const items = weeklyWrongMap[weekNumber] || [];
-    startTestSession("weeklyWrong", items, `${weekNumber}주차 오답 테스트`);
+    startTestSession("weeklyWrong", items, `${weekNumber}주차 오답 테스트`, {
+      targetType: "week",
+      targetValue: weekNumber,
+    });
   }
 
   function startMonthlyWrongTest(monthNumber) {
     const items = monthlyWrongMap[monthNumber] || [];
-    startTestSession("monthlyWrong", items, `${monthNumber}달차 오답 테스트`);
+    startTestSession("monthlyWrong", items, `${monthNumber}달차 오답 테스트`, {
+      targetType: "month",
+      targetValue: monthNumber,
+    });
   }
 
   async function finalizeTestSession(session) {
     if (!session) return;
 
-    const wrongItems = session.wrongItems || [];
+    const wrongItems = sortWrongWords(session.wrongItems || []);
+    const targetValue = session?.target?.targetValue;
 
     if (session.type === "daily") {
-      const nextTodayWrongWords = mergeUniqueWords([], wrongItems);
+      const nextTodayWrongWords = mergeUniqueWrongWords([], wrongItems);
       setTodayWrongWords(nextTodayWrongWords);
 
       await persistState(
@@ -752,12 +899,13 @@ export default function App() {
         monthlyWrongMap,
         testDirection
       );
+      return;
     }
 
     if (session.type === "dailyWrong") {
-      const week = currentWeek;
+      const week = getWeekFromDay(targetValue || currentDay);
       const prevWeekWords = weeklyWrongMap[week] || [];
-      const nextWeekWords = mergeUniqueWords(prevWeekWords, wrongItems);
+      const nextWeekWords = mergeUniqueWrongWords(prevWeekWords, wrongItems);
       const nextWeeklyWrongMap = {
         ...weeklyWrongMap,
         [week]: nextWeekWords,
@@ -781,13 +929,14 @@ export default function App() {
         monthlyWrongMap,
         testDirection
       );
+      return;
     }
 
     if (session.type === "weeklyWrong") {
-      const week = currentWeek;
-      const month = currentMonth;
+      const week = targetValue;
+      const month = getMonthFromDay((week - 1) * 7 + 1);
       const prevMonthWords = monthlyWrongMap[month] || [];
-      const nextMonthWords = mergeUniqueWords(prevMonthWords, wrongItems);
+      const nextMonthWords = mergeUniqueWrongWords(prevMonthWords, wrongItems);
 
       const nextWeeklyWrongMap = {
         ...weeklyWrongMap,
@@ -817,10 +966,11 @@ export default function App() {
         nextMonthlyWrongMap,
         testDirection
       );
+      return;
     }
 
     if (session.type === "monthlyWrong") {
-      const month = currentMonth;
+      const month = targetValue;
       const nextMonthlyWrongMap = {
         ...monthlyWrongMap,
         [month]: wrongItems,
@@ -862,13 +1012,21 @@ export default function App() {
   }
 
   async function handleTestNext() {
-    if (!testSession || !currentTestItem || !testChecked || !testFeedback) return;
+    if (!testSession || !currentTestItem || !testChecked || !testFeedback)
+      return;
 
     const isCorrect = testFeedback.correct;
     const nextCorrectCount = testSession.correctCount + (isCorrect ? 1 : 0);
+
+    const enrichedWrong = enrichWrongItem(
+      currentTestItem,
+      testSession.type,
+      testSession?.target?.targetValue
+    );
+
     const nextWrongItems = isCorrect
       ? testSession.wrongItems
-      : [...testSession.wrongItems, currentTestItem];
+      : mergeUniqueWrongWords(testSession.wrongItems, [enrichedWrong]);
 
     const isLast = testSession.currentIndex >= testSession.items.length - 1;
 
@@ -1106,9 +1264,14 @@ export default function App() {
 
   return (
     <div style={pageStyle}>
-      {menuOpen && <div style={overlayStyle} onClick={() => setMenuOpen(false)} />}
+      {menuOpen && (
+        <div style={overlayStyle} onClick={() => setMenuOpen(false)} />
+      )}
 
-      <button style={menuButtonStyle} onClick={() => setMenuOpen((prev) => !prev)}>
+      <button
+        style={menuButtonStyle}
+        onClick={() => setMenuOpen((prev) => !prev)}
+      >
         ☰
       </button>
 
@@ -1136,7 +1299,9 @@ export default function App() {
           단어 암기 프로그램으로 돌아가기
         </button>
 
-        <div style={{ marginTop: "16px", fontWeight: "bold", marginBottom: "10px" }}>
+        <div
+          style={{ marginTop: "16px", fontWeight: "bold", marginBottom: "10px" }}
+        >
           학습 구간
         </div>
 
@@ -1144,7 +1309,10 @@ export default function App() {
           {monthTree.map((month) => (
             <div key={`month-${month.month}`} style={{ marginBottom: "10px" }}>
               <div style={monthRowStyle}>
-                <button onClick={() => toggleMonth(month.month)} style={toggleButtonStyle}>
+                <button
+                  onClick={() => toggleMonth(month.month)}
+                  style={toggleButtonStyle}
+                >
                   {expandedMonths[month.month] ? "▼" : "▶"} {month.month}달차
                 </button>
 
@@ -1155,9 +1323,13 @@ export default function App() {
                   style={{
                     ...reviewPickButtonStyle,
                     backgroundColor:
-                      (monthlyWrongMap[month.month] || []).length > 0 ? "#111" : "white",
+                      (monthlyWrongMap[month.month] || []).length > 0
+                        ? "#111"
+                        : "white",
                     color:
-                      (monthlyWrongMap[month.month] || []).length > 0 ? "white" : "black",
+                      (monthlyWrongMap[month.month] || []).length > 0
+                        ? "white"
+                        : "black",
                   }}
                 >
                   월오답
@@ -1165,8 +1337,9 @@ export default function App() {
               </div>
 
               <div style={metaTextStyle}>
-                {month.startDay}~{month.endDay}일 · 단어 {month.filledCount} · 오답 {month.wrongCount} ·
-                월오답 {(monthlyWrongMap[month.month] || []).length}
+                {month.startDay}~{month.endDay}일 · 단어 {month.filledCount} ·
+                오답 {month.wrongCount} · 월오답{" "}
+                {(monthlyWrongMap[month.month] || []).length}
               </div>
 
               {expandedMonths[month.month] && (
@@ -1178,7 +1351,9 @@ export default function App() {
                           onClick={() => toggleWeek(week.week)}
                           style={{
                             ...weekToggleStyle,
-                            borderColor: isActiveReview("week", week.week) ? "#111" : "#ccc",
+                            borderColor: isActiveReview("week", week.week)
+                              ? "#111"
+                              : "#ccc",
                           }}
                         >
                           {expandedWeeks[week.week] ? "▼" : "▶"} {week.week}주차
@@ -1189,9 +1364,13 @@ export default function App() {
                           style={{
                             ...reviewPickButtonStyle,
                             backgroundColor:
-                              (weeklyWrongMap[week.week] || []).length > 0 ? "#111" : "white",
+                              (weeklyWrongMap[week.week] || []).length > 0
+                                ? "#111"
+                                : "white",
                             color:
-                              (weeklyWrongMap[week.week] || []).length > 0 ? "white" : "black",
+                              (weeklyWrongMap[week.week] || []).length > 0
+                                ? "white"
+                                : "black",
                           }}
                         >
                           주오답
@@ -1199,19 +1378,28 @@ export default function App() {
                       </div>
 
                       <div style={metaTextStyle}>
-                        {week.startDay}~{week.endDay}일 · 단어 {week.filledCount} · 오답 {week.wrongCount} ·
-                        주오답 {(weeklyWrongMap[week.week] || []).length}
+                        {week.startDay}~{week.endDay}일 · 단어 {week.filledCount} ·
+                        오답 {week.wrongCount} · 주오답{" "}
+                        {(weeklyWrongMap[week.week] || []).length}
                       </div>
 
                       {expandedWeeks[week.week] && (
                         <div style={dayListStyle}>
                           {week.days.map((dayData) => {
-                            const filledCount = dayData.words.filter((w) => w.word.trim()).length;
-                            const wrongCount = dayData.words.filter((w) => w.colorIndex >= 0).length;
-                            const active = !reviewMode && currentDay === dayData.day;
+                            const filledCount = dayData.words.filter(
+                              (w) => w.word.trim()
+                            ).length;
+                            const wrongCount = dayData.words.filter(
+                              (w) => w.colorIndex >= 0
+                            ).length;
+                            const active =
+                              !reviewMode && currentDay === dayData.day;
 
                             return (
-                              <div key={`day-${dayData.day}`} style={dayRowStyle}>
+                              <div
+                                key={`day-${dayData.day}`}
+                                style={dayRowStyle}
+                              >
                                 <button
                                   onClick={() => {
                                     setCurrentDay(dayData.day);
@@ -1227,7 +1415,9 @@ export default function App() {
                                     borderColor: active ? "#111" : "#ccc",
                                   }}
                                 >
-                                  <div style={{ fontWeight: "bold" }}>{dayData.day}일차</div>
+                                  <div style={{ fontWeight: "bold" }}>
+                                    {dayData.day}일차
+                                  </div>
                                   <div style={metaTextStyle}>
                                     단어 {filledCount}/30 · 오답 {wrongCount}
                                   </div>
@@ -1235,15 +1425,25 @@ export default function App() {
 
                                 <button
                                   onClick={() => {
-                                    setReviewTarget({ type: "day", value: dayData.day });
+                                    setReviewTarget({
+                                      type: "day",
+                                      value: dayData.day,
+                                    });
                                     setReviewMode(true);
                                     closeTestSession();
                                     setMenuOpen(false);
                                   }}
                                   style={{
                                     ...reviewPickButtonStyle,
-                                    backgroundColor: isActiveReview("day", dayData.day) ? "#111" : "white",
-                                    color: isActiveReview("day", dayData.day) ? "white" : "black",
+                                    backgroundColor: isActiveReview(
+                                      "day",
+                                      dayData.day
+                                    )
+                                      ? "#111"
+                                      : "white",
+                                    color: isActiveReview("day", dayData.day)
+                                      ? "white"
+                                      : "black",
                                   }}
                                 >
                                   복습
@@ -1305,11 +1505,19 @@ export default function App() {
                 style={authInputStyle}
               />
 
-              <button onClick={handleSignUp} style={toolbarButtonStyle} disabled={authLoading}>
+              <button
+                onClick={handleSignUp}
+                style={toolbarButtonStyle}
+                disabled={authLoading}
+              >
                 {authLoading ? "처리 중..." : "회원가입"}
               </button>
 
-              <button onClick={handleSignIn} style={toolbarButtonStyle} disabled={authLoading}>
+              <button
+                onClick={handleSignIn}
+                style={toolbarButtonStyle}
+                disabled={authLoading}
+              >
                 {authLoading ? "처리 중..." : "로그인"}
               </button>
             </>
@@ -1326,8 +1534,12 @@ export default function App() {
 
         <div style={badgeWrapStyle}>
           <div style={infoBadgeStyle}>오늘 오답 {todayWrongWords.length}</div>
-          <div style={infoBadgeStyle}>{currentWeek}주차 오답 {currentWeeklyWrongCount}</div>
-          <div style={infoBadgeStyle}>{currentMonth}달차 오답 {currentMonthlyWrongCount}</div>
+          <div style={infoBadgeStyle}>
+            {currentWeek}주차 오답 {currentWeeklyWrongCount}
+          </div>
+          <div style={infoBadgeStyle}>
+            {currentMonth}달차 오답 {currentMonthlyWrongCount}
+          </div>
         </div>
 
         <div style={dayActionWrapStyle}>
@@ -1374,7 +1586,8 @@ export default function App() {
             onClick={() => startWeeklyWrongTest(currentWeek)}
             style={{
               ...toolbarButtonStyle,
-              backgroundColor: currentWeeklyWrongCount > 0 ? "#111" : "white",
+              backgroundColor:
+                currentWeeklyWrongCount > 0 ? "#111" : "white",
               color: currentWeeklyWrongCount > 0 ? "white" : "black",
             }}
           >
@@ -1385,7 +1598,8 @@ export default function App() {
             onClick={() => startMonthlyWrongTest(currentMonth)}
             style={{
               ...toolbarButtonStyle,
-              backgroundColor: currentMonthlyWrongCount > 0 ? "#111" : "white",
+              backgroundColor:
+                currentMonthlyWrongCount > 0 ? "#111" : "white",
               color: currentMonthlyWrongCount > 0 ? "white" : "black",
             }}
           >
@@ -1399,7 +1613,8 @@ export default function App() {
               <>
                 <div style={testTitleStyle}>테스트 완료</div>
                 <div style={testSummaryStyle}>
-                  총 {testSession.items.length}문제 · 정답 {testSession.correctCount}개 · 오답{" "}
+                  총 {testSession.items.length}문제 · 정답{" "}
+                  {testSession.correctCount}개 · 오답{" "}
                   {testSession.wrongItems.length}개
                 </div>
 
@@ -1408,20 +1623,45 @@ export default function App() {
                     테스트 닫기
                   </button>
 
-                  {testSession.type === "daily" && testSession.wrongItems.length > 0 && (
-                    <button onClick={startTodayWrongTest} style={toolbarButtonStyle}>
-                      오늘 오답 테스트
-                    </button>
-                  )}
+                  {testSession.type === "daily" &&
+                    testSession.wrongItems.length > 0 && (
+                      <button
+                        onClick={startTodayWrongTest}
+                        style={toolbarButtonStyle}
+                      >
+                        오늘 오답 테스트
+                      </button>
+                    )}
 
                   {testSession.type === "dailyWrong" && (
-                    <button onClick={() => startWeeklyWrongTest(currentWeek)} style={toolbarButtonStyle}>
+                    <button
+                      onClick={() =>
+                        startWeeklyWrongTest(
+                          getWeekFromDay(
+                            testSession?.target?.targetValue || currentDay
+                          )
+                        )
+                      }
+                      style={toolbarButtonStyle}
+                    >
                       주간 오답 테스트
                     </button>
                   )}
 
                   {testSession.type === "weeklyWrong" && (
-                    <button onClick={() => startMonthlyWrongTest(currentMonth)} style={toolbarButtonStyle}>
+                    <button
+                      onClick={() =>
+                        startMonthlyWrongTest(
+                          getMonthFromDay(
+                            ((testSession?.target?.targetValue || currentWeek) -
+                              1) *
+                              7 +
+                              1
+                          )
+                        )
+                      }
+                      style={toolbarButtonStyle}
+                    >
                       월간 오답 테스트
                     </button>
                   )}
@@ -1429,15 +1669,26 @@ export default function App() {
 
                 {testSession.wrongItems.length > 0 && (
                   <div style={{ marginTop: "14px" }}>
-                    <div style={{ fontWeight: "bold", marginBottom: "8px", color: "black" }}>
+                    <div
+                      style={{
+                        fontWeight: "bold",
+                        marginBottom: "8px",
+                        color: "black",
+                      }}
+                    >
                       이번 테스트 오답
                     </div>
                     <div style={wrongListStyle}>
                       {testSession.wrongItems.map((item, idx) => (
                         <div key={`${wordKey(item)}-${idx}`} style={wrongItemStyle}>
-                          <div style={{ fontWeight: "bold", color: "black" }}>{item.word}</div>
+                          <div style={{ fontWeight: "bold", color: "black" }}>
+                            {item.word}
+                          </div>
                           <div style={metaTextStyle}>{item.meaning}</div>
-                          <div style={metaTextStyle}>원본 {item.originDay}일차</div>
+                          <div style={metaTextStyle}>
+                            원본 {item.originDay}일차 · 누적 오답{" "}
+                            {item.wrongCount || 1}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1458,8 +1709,10 @@ export default function App() {
                     onClick={() => setTestDirection("meaningToWord")}
                     style={{
                       ...toolbarButtonStyle,
-                      backgroundColor: testDirection === "meaningToWord" ? "#111" : "white",
-                      color: testDirection === "meaningToWord" ? "white" : "black",
+                      backgroundColor:
+                        testDirection === "meaningToWord" ? "#111" : "white",
+                      color:
+                        testDirection === "meaningToWord" ? "white" : "black",
                     }}
                   >
                     뜻 보고 영어 쓰기
@@ -1469,8 +1722,10 @@ export default function App() {
                     onClick={() => setTestDirection("wordToMeaning")}
                     style={{
                       ...toolbarButtonStyle,
-                      backgroundColor: testDirection === "wordToMeaning" ? "#111" : "white",
-                      color: testDirection === "wordToMeaning" ? "white" : "black",
+                      backgroundColor:
+                        testDirection === "wordToMeaning" ? "#111" : "white",
+                      color:
+                        testDirection === "wordToMeaning" ? "white" : "black",
                     }}
                   >
                     영어 보고 뜻 쓰기
@@ -1488,7 +1743,9 @@ export default function App() {
                   </div>
 
                   {currentTestItem?.originDay && (
-                    <div style={metaTextStyle}>원본 {currentTestItem.originDay}일차</div>
+                    <div style={metaTextStyle}>
+                      원본 {currentTestItem.originDay}일차
+                    </div>
                   )}
                 </div>
 
@@ -1586,8 +1843,10 @@ export default function App() {
                     }}
                     style={{
                       ...toolbarButtonStyle,
-                      backgroundColor: testMode === "hideMeaning" ? "#111" : "white",
-                      color: testMode === "hideMeaning" ? "white" : "black",
+                      backgroundColor:
+                        testMode === "hideMeaning" ? "#111" : "white",
+                      color:
+                        testMode === "hideMeaning" ? "white" : "black",
                     }}
                   >
                     뜻 숨기기
@@ -1600,7 +1859,8 @@ export default function App() {
                     }}
                     style={{
                       ...toolbarButtonStyle,
-                      backgroundColor: testMode === "hideWord" ? "#111" : "white",
+                      backgroundColor:
+                        testMode === "hideWord" ? "#111" : "white",
                       color: testMode === "hideWord" ? "white" : "black",
                     }}
                   >
@@ -1642,7 +1902,11 @@ break the ice\t어색한 분위기를 깨다`}
 
                 <button
                   onClick={applyBulkPaste}
-                  style={{ ...actionButtonStyle, marginTop: "8px", maxWidth: "220px" }}
+                  style={{
+                    ...actionButtonStyle,
+                    marginTop: "8px",
+                    maxWidth: "220px",
+                  }}
                 >
                   전체 적용
                 </button>
@@ -1659,20 +1923,32 @@ break the ice\t어색한 분위기를 깨다`}
                     <th style={wordThStyle}>단어</th>
                     <th style={meaningThStyle}>뜻</th>
                     <th style={{ ...thStyle, width: "54px" }}>발음</th>
-                    {!reviewMode && <th style={{ ...thStyle, width: "58px" }}>정답</th>}
+                    {!reviewMode && (
+                      <th style={{ ...thStyle, width: "58px" }}>정답</th>
+                    )}
                   </tr>
                 </thead>
 
                 <tbody>
                   {displayRows.map((item, index) => {
-                    const color = item.colorIndex === -1 ? "black" : rainbowColors[item.colorIndex];
+                    const color =
+                      item.colorIndex === -1
+                        ? "black"
+                        : rainbowColors[item.colorIndex];
                     const hiddenType = getHiddenType(index);
-                    const hideWord = testMode !== "none" && hiddenType === "word" && !showAnswers;
+                    const hideWord =
+                      testMode !== "none" &&
+                      hiddenType === "word" &&
+                      !showAnswers;
                     const hideMeaning =
-                      testMode !== "none" && hiddenType === "meaning" && !showAnswers;
+                      testMode !== "none" &&
+                      hiddenType === "meaning" &&
+                      !showAnswers;
 
                     return (
-                      <tr key={reviewMode ? `${item.day}-${item.id}-${index}` : item.id}>
+                      <tr
+                        key={reviewMode ? `${item.day}-${item.id}-${index}` : item.id}
+                      >
                         <td
                           style={{
                             ...smallTdStyle,
@@ -1687,19 +1963,31 @@ break the ice\t어색한 분위기를 깨다`}
 
                         <td style={{ ...wordTdStyle, color, fontWeight: "bold" }}>
                           {reviewMode ? (
-                            hideWord ? <span style={hiddenTextStyle}>????</span> : item.word || "-"
+                            hideWord ? (
+                              <span style={hiddenTextStyle}>????</span>
+                            ) : (
+                              item.word || "-"
+                            )
                           ) : hideWord ? (
                             <span style={hiddenTextStyle}>????</span>
                           ) : (
                             <input
                               value={item.word}
-                              onChange={(e) => handleChange(index, "word", e.target.value)}
+                              onChange={(e) =>
+                                handleChange(index, "word", e.target.value)
+                              }
                               style={{ ...compactInputStyle, color }}
                             />
                           )}
                         </td>
 
-                        <td style={{ ...meaningTdStyle, color, fontWeight: "bold" }}>
+                        <td
+                          style={{
+                            ...meaningTdStyle,
+                            color,
+                            fontWeight: "bold",
+                          }}
+                        >
                           {reviewMode ? (
                             hideMeaning ? (
                               <span style={hiddenTextStyle}>????</span>
@@ -1711,21 +1999,29 @@ break the ice\t어색한 분위기를 깨다`}
                           ) : (
                             <input
                               value={item.meaning}
-                              onChange={(e) => handleChange(index, "meaning", e.target.value)}
+                              onChange={(e) =>
+                                handleChange(index, "meaning", e.target.value)
+                              }
                               style={{ ...compactInputStyle, color }}
                             />
                           )}
                         </td>
 
                         <td style={smallTdStyle}>
-                          <button onClick={() => speakWord(item.word)} style={tinyButtonStyle}>
+                          <button
+                            onClick={() => speakWord(item.word)}
+                            style={tinyButtonStyle}
+                          >
                             🔊
                           </button>
                         </td>
 
                         {!reviewMode && (
                           <td style={smallTdStyle}>
-                            <button onClick={() => markAsCorrect(index)} style={tinyButtonStyle}>
+                            <button
+                              onClick={() => markAsCorrect(index)}
+                              style={tinyButtonStyle}
+                            >
                               정답
                             </button>
                           </td>
