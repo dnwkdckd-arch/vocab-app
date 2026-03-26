@@ -22,6 +22,9 @@ const createEmptyDayWords = () =>
     id: i + 1,
     word: "",
     meaning: "",
+    aliases: [],
+    level: "",
+    pos: "",
     colorIndex: -1,
   }));
 
@@ -67,134 +70,31 @@ function normalizeText(text) {
   return String(text || "")
     .toLowerCase()
     .trim()
+    .replace(/\([^)]*\)/g, "")
     .replace(/[.,!?]/g, "")
     .replace(/\s+/g, " ");
 }
 
-function normalizeMeaningText(text) {
-  return normalizeText(text)
-    .replace(/\([^)]*\)/g, "")
-    .replace(/~/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function meaningTokens(text) {
+function splitMeaningTokens(text) {
   return String(text || "")
-    .split(/[;/]/)
-    .map((v) => normalizeMeaningText(v))
+    .split(/[|,/;]+/)
+    .map((v) => normalizeText(v))
     .filter(Boolean);
 }
 
-const MEANING_SYNONYM_MAP = {
-  "받아들이다": ["수락하다", "인정하다"],
-  "대답하다": ["답하다", "응답하다"],
-  "도착하다": ["도착", "도달하다"],
-  "묻다": ["질문하다", "물어보다"],
-  "빌리다": ["대여하다"],
-  "가져오다": ["들고오다", "갖고오다"],
-  "선택하다": ["고르다"],
-  "결정하다": ["정하다"],
-  "끝내다": ["마치다", "완료하다"],
-  "설명하다": ["풀어서 말하다"],
-  "찾다": ["발견하다"],
-  "유지하다": ["계속하다", "지키다"],
-  "떠나다": ["출발하다"],
-  "만들다": ["제작하다", "생성하다"],
-  "만나다": ["보다", "대면하다"],
-  "지불하다": ["내다", "결제하다"],
-  "보여주다": ["제시하다"],
-  "말하다": ["이야기하다", "얘기하다", "전하다"],
-  "공부하다": ["학습하다"],
-  "노력하다": ["애쓰다", "시도하다"],
-  "이해하다": ["알아듣다", "파악하다"],
-  "사용하다": ["쓰다", "이용하다"],
-  "기다리다": ["대기하다"],
-  "걷다": ["걸어가다"],
-  "원하다": ["바라다"],
-  "일하다": ["근무하다"],
-  "조언": ["충고"],
-  "나타내다": ["보여주다"],
-  "의사소통하다": ["소통하다"],
-  "비교하다": ["견주다"],
-  "계속하다": ["지속하다"],
-  "어려운": ["힘든"],
-  "준비하다": ["대비하다"],
-  "깨닫다": ["알아차리다", "인지하다"],
-  "추천하다": ["권하다"],
-  "분석하다": ["해석하다"],
-  "가정하다": ["추정하다"],
-  "기여하다": ["도움이 되다"],
-  "설득하다": ["납득시키다"],
-  "평가하다": ["판단하다", "채점하다"],
-  "증거": ["근거"],
-  "영향": ["효과"],
-  "해석하다": ["풀이하다", "이해하다"],
-  "관련 있는": ["연관된"],
-  "중요한": ["핵심적인", "의미있는"],
-  "전략": ["계획"],
-  "추세": ["경향"],
-};
-
-function expandMeaningAliases(item) {
-  const baseTokens = [
-    ...meaningTokens(item.meaning),
-    ...((item.aliases || []).map((v) => normalizeMeaningText(v))),
-  ];
-
-  const result = new Set(baseTokens);
-
-  baseTokens.forEach((token) => {
-    const synonyms = MEANING_SYNONYM_MAP[token] || [];
-    synonyms.forEach((syn) => result.add(normalizeMeaningText(syn)));
-
-    if (token.endsWith("하다") && token.length > 2) {
-      result.add(token.slice(0, -2));
-    }
-    if (token.endsWith("되다") && token.length > 2) {
-      result.add(token.slice(0, -2));
-    }
-  });
-
-  return Array.from(result);
-}
-
-function isLooseMeaningMatch(input, token) {
-  if (input === token) return true;
-  if (input.length < 2 || token.length < 2) return false;
-  return token.includes(input) || input.includes(token);
-}
-
-function isAnswerCorrect(userAnswer, item, direction) {
-  const input = normalizeText(userAnswer);
-
-  if (!input) return false;
-
-  if (direction === "meaningToWord") {
-    const answerWord = normalizeText(item.word);
-    return input === answerWord;
-  }
-
-  const normalizedInput = normalizeMeaningText(input);
-  const acceptedMeanings = expandMeaningAliases(item);
-
-  if (acceptedMeanings.includes(normalizedInput)) return true;
-
-  return acceptedMeanings.some((token) =>
-    isLooseMeaningMatch(normalizedInput, token)
-  );
-}
-
 function wordKey(item) {
-  return `${item.originDay || item.day || 0}__${normalizeText(
-    item.word
-  )}__${normalizeText(item.meaning)}`;
+  return `${String(item?.word || "").trim().toLowerCase()}__${String(
+    item?.pos || ""
+  )
+    .trim()
+    .toLowerCase()}`;
 }
 
-function enrichWord(item, fallbackDay) {
+function enrichWord(item, fallbackDay = 0) {
   return {
     ...item,
-    originDay: item.originDay || item.day || fallbackDay,
+    aliases: Array.isArray(item?.aliases) ? item.aliases : [],
+    originDay: item?.originDay || item?.day || fallbackDay || 0,
   };
 }
 
@@ -202,28 +102,86 @@ function mergeUniqueWords(base = [], incoming = []) {
   const map = new Map();
 
   [...base, ...incoming].forEach((item) => {
-    const normalized = enrichWord(item, item.originDay || item.day || 0);
+    const normalized = enrichWord(item, item?.originDay || item?.day || 0);
     map.set(wordKey(normalized), normalized);
   });
 
   return Array.from(map.values());
 }
 
+function getMeaningAnswers(item) {
+  if (!item) return [];
+
+  const set = new Set();
+
+  splitMeaningTokens(item.meaning).forEach((token) => {
+    set.add(token);
+  });
+
+  (item.aliases || []).forEach((alias) => {
+    splitMeaningTokens(alias).forEach((token) => {
+      set.add(token);
+    });
+  });
+
+  return Array.from(set);
+}
+
+function getWordAnswers(item) {
+  if (!item) return [];
+
+  const set = new Set();
+  set.add(normalizeText(item.word));
+
+  (item.aliases || []).forEach((alias) => {
+    const value = String(alias || "").trim();
+    if (/^[a-zA-Z\s'-]+$/.test(value)) {
+      set.add(normalizeText(value));
+    }
+  });
+
+  return Array.from(set);
+}
+
+function getCorrectAnswerText(item, direction) {
+  if (!item) return "";
+
+  if (direction === "meaningToWord") {
+    return getWordAnswers(item).join(", ");
+  }
+
+  return getMeaningAnswers(item).join(", ");
+}
+
+function isAnswerCorrect(userAnswer, item, direction) {
+  const input = normalizeText(userAnswer);
+  if (!input || !item) return false;
+
+  if (direction === "meaningToWord") {
+    return getWordAnswers(item).includes(input);
+  }
+
+  return getMeaningAnswers(item).includes(input);
+}
+
 function enrichWrongItem(item, stage, targetValue) {
   return {
-    ...enrichWord(item, item.originDay || item.day || 0),
-    wrongCount: (item.wrongCount || 0) + 1,
-    lastWrongStage: stage,
-    lastWrongTarget: targetValue,
-    lastWrongAt: Date.now(),
+    ...enrichWord(item, item?.originDay || item?.day || 0),
+    aliases: Array.isArray(item?.aliases) ? item.aliases : [],
+    wrongStage: stage,
+    wrongTargetValue: targetValue,
+    wrongCount: (item?.wrongCount || 0) + 1,
   };
 }
 
 function sortWrongWords(items = []) {
   return [...items].sort((a, b) => {
-    const wrongDiff = (b.wrongCount || 0) - (a.wrongCount || 0);
-    if (wrongDiff !== 0) return wrongDiff;
-    return (b.lastWrongAt || 0) - (a.lastWrongAt || 0);
+    const aDay = a.originDay || a.day || 0;
+    const bDay = b.originDay || b.day || 0;
+    if (aDay !== bDay) return aDay - bDay;
+    return (a.word || "").localeCompare(b.word || "", "en", {
+      sensitivity: "base",
+    });
   });
 }
 
@@ -231,8 +189,27 @@ function mergeUniqueWrongWords(base = [], incoming = []) {
   const map = new Map();
 
   [...base, ...incoming].forEach((item) => {
-    const normalized = enrichWord(item, item.originDay || item.day || 0);
-    map.set(wordKey(normalized), normalized);
+    const normalized = enrichWord(item, item?.originDay || item?.day || 0);
+    const key = wordKey(normalized);
+
+    if (!map.has(key)) {
+      map.set(key, {
+        ...normalized,
+        aliases: Array.isArray(normalized.aliases) ? normalized.aliases : [],
+      });
+      return;
+    }
+
+    const oldItem = map.get(key);
+
+    map.set(key, {
+      ...oldItem,
+      ...normalized,
+      aliases: Array.from(
+        new Set([...(oldItem.aliases || []), ...(normalized.aliases || [])])
+      ),
+      wrongCount: Math.max(oldItem.wrongCount || 1, normalized.wrongCount || 1),
+    });
   });
 
   return sortWrongWords(Array.from(map.values()));
@@ -641,21 +618,42 @@ export default function App() {
     await persistState(nextDays);
   };
 
-  const handleChange = async (index, field, value) => {
-    if (reviewMode || testSession) return;
+const handleChange = async (index, field, value) => {
+  if (reviewMode || testSession) return;
 
-    const nextDays = days.map((dayData) => {
-      if (dayData.day !== currentDay) return dayData;
+  const nextDays = days.map((dayData) => {
+    if (dayData.day !== currentDay) return dayData;
 
-      const updated = [...dayData.words];
-      updated[index] = { ...updated[index], [field]: value };
+    const updated = [...dayData.words];
+    updated[index] = {
+      ...updated[index],
+      [field]: value,
+      aliases: Array.isArray(updated[index].aliases)
+        ? updated[index].aliases
+        : [],
+    };
 
-      return { ...dayData, words: updated };
-    });
+    return { ...dayData, words: updated };
+  });
 
-    setDays(nextDays);
-    await persistState(nextDays);
-  };
+  setDays(nextDays);
+
+  await persistState(
+    nextDays,
+    currentDay,
+    reviewMode,
+    reviewTarget,
+    expandedMonths,
+    expandedWeeks,
+    testMode,
+    showAnswers,
+    randomHideMap,
+    todayWrongWords,
+    weeklyWrongMap,
+    monthlyWrongMap,
+    testDirection
+  );
+};
 
   const markAsCorrect = async (index) => {
     if (reviewMode || testSession) return;
@@ -674,37 +672,61 @@ export default function App() {
   };
 
   const applyBulkPaste = async () => {
-    if (reviewMode || testSession) return;
+  if (reviewMode || testSession) return;
 
-    const lines = bulkText
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(0, WORDS_PER_DAY);
+  const lines = bulkText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, WORDS_PER_DAY);
 
-    const nextDays = days.map((dayData) => {
-      if (dayData.day !== currentDay) return dayData;
+  const nextDays = days.map((dayData) => {
+    if (dayData.day !== currentDay) return dayData;
 
-      const updated = [...dayData.words];
+    const updated = [...dayData.words];
 
-      lines.forEach((line, i) => {
-        const parts = line.includes("\t")
-          ? line.split("\t")
-          : line.split(/\s*,\s*/);
+    lines.forEach((line, i) => {
+      const parts = line.includes("\t")
+        ? line.split("\t")
+        : line.split(/\s*,\s*/);
 
-        updated[i] = {
-          ...updated[i],
-          word: (parts[0] || "").trim(),
-          meaning: (parts.slice(1).join(" / ") || "").trim(),
-        };
-      });
+      const word = (parts[0] || "").trim();
+      const meaning = (parts[1] || "").trim();
+      const aliases = (parts[2] || "")
+        .split("|")
+        .map((v) => v.trim())
+        .filter(Boolean);
 
-      return { ...dayData, words: updated };
+      updated[i] = {
+        ...updated[i],
+        word,
+        meaning,
+        aliases,
+      };
     });
 
-    setDays(nextDays);
-    await persistState(nextDays);
-  };
+    return { ...dayData, words: updated };
+  });
+
+  setDays(nextDays);
+  setBulkText("");
+
+  await persistState(
+    nextDays,
+    currentDay,
+    reviewMode,
+    reviewTarget,
+    expandedMonths,
+    expandedWeeks,
+    testMode,
+    showAnswers,
+    randomHideMap,
+    todayWrongWords,
+    weeklyWrongMap,
+    monthlyWrongMap,
+    testDirection
+  );
+};
 
   const addNextDay = async () => {
     const nextDay = Math.min(currentDay + 1, days.length);
@@ -997,19 +1019,16 @@ export default function App() {
   }
 
   function handleTestCheck() {
-    if (!testSession || !currentTestItem || testChecked) return;
+  if (!testSession || !currentTestItem || testChecked) return;
 
-    const correct = isAnswerCorrect(testInput, currentTestItem, testDirection);
+  const correct = isAnswerCorrect(testInput, currentTestItem, testDirection);
 
-    setTestChecked(true);
-    setTestFeedback({
-      correct,
-      correctAnswer:
-        testDirection === "meaningToWord"
-          ? currentTestItem.word
-          : currentTestItem.meaning,
-    });
-  }
+  setTestChecked(true);
+  setTestFeedback({
+    correct,
+    correctAnswer: getCorrectAnswerText(currentTestItem, testDirection),
+  });
+}
 
   async function handleTestNext() {
     if (!testSession || !currentTestItem || !testChecked || !testFeedback)
@@ -1684,7 +1703,7 @@ export default function App() {
                           <div style={{ fontWeight: "bold", color: "black" }}>
                             {item.word}
                           </div>
-                          <div style={metaTextStyle}>{item.meaning}</div>
+                          <div style={metaTextStyle}>{getMeaningAnswers(item).join(", ")}</div>
                           <div style={metaTextStyle}>
                             원본 {item.originDay}일차 · 누적 오답{" "}
                             {item.wrongCount || 1}
@@ -1738,7 +1757,7 @@ export default function App() {
                   </div>
                   <div style={questionTextStyle}>
                     {testDirection === "meaningToWord"
-                      ? currentTestItem?.meaning
+                      ? getMeaningAnswers(currentTestItem).join(", ")
                       : currentTestItem?.word}
                   </div>
 
@@ -1894,9 +1913,10 @@ export default function App() {
                   value={bulkText}
                   onChange={(e) => setBulkText(e.target.value)}
                   placeholder={`전체 복붙용 입력창
-형식 예시:
-a piece of cake\t아주 쉬운 일
-break the ice\t어색한 분위기를 깨다`}
+                  형식 예시:
+                  wait,기다리다,잠깐|대기하다
+                  number,숫자,수
+                  choose,선택하다,고르다`}
                   style={textareaStyle}
                 />
 
@@ -1992,7 +2012,7 @@ break the ice\t어색한 분위기를 깨다`}
                             hideMeaning ? (
                               <span style={hiddenTextStyle}>????</span>
                             ) : (
-                              item.meaning || "-"
+                              getMeaningAnswers(item).join(", ") || "-"
                             )
                           ) : hideMeaning ? (
                             <span style={hiddenTextStyle}>????</span>
